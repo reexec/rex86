@@ -9,7 +9,8 @@ if(NOT REX86_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
     message(FATAL_ERROR "VERSION must be major.minor.patch, got '${REX86_VERSION}'")
 endif()
 
-project(rex86 VERSION "${REX86_VERSION}" LANGUAGES CXX)
+# C is for the vendored Zydis amalgamation; the core itself is C++.
+project(rex86 VERSION "${REX86_VERSION}" LANGUAGES C CXX)
 message(STATUS "rex86 version ${REX86_VERSION}")
 
 set(CMAKE_CXX_STANDARD 20)
@@ -38,21 +39,34 @@ else()
     endif()
 endif()
 
-# The core: the CPU state, the guest memory view, the host contract and the
-# Cpu. No OS header is included anywhere under include/ or src/; what the
-# core needs from the OS arrives through Environment and CodeCacheServices.
+# The vendored Zydis v4.1.1 amalgamation (MIT, with Zycore; see
+# THIRD_PARTY_NOTICES.md). Third-party code does not get rex86_warnings, so
+# its warnings cannot break a -Werror CI job.
+add_library(rex86_zydis STATIC
+    third_party/zydis/Zydis.c
+)
+target_include_directories(rex86_zydis PUBLIC third_party/zydis)
+target_compile_definitions(rex86_zydis PUBLIC ZYDIS_STATIC_BUILD)
+
+# The core: the CPU state, the guest memory view, the host contract, the
+# decoder and the Cpu. No OS header is included anywhere under include/ or
+# src/; what the core needs from the OS arrives through Environment and
+# CodeCacheServices. Zydis is PRIVATE: no public header exposes its types,
+# which is what keeps the decoder replaceable.
 add_library(rex86_core STATIC
     src/version.cpp
     src/cpu_state.cpp
     src/guest_memory.cpp
     src/cpu.cpp
+    src/decode/decoder.cpp
 )
 add_library(rex86::core ALIAS rex86_core)
 target_include_directories(rex86_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
+target_include_directories(rex86_core PRIVATE src)
 target_compile_definitions(rex86_core PRIVATE REX86_VERSION="${REX86_VERSION}")
-target_link_libraries(rex86_core PRIVATE rex86_warnings)
+target_link_libraries(rex86_core PRIVATE rex86_warnings rex86_zydis)
 
 if(REX86_BUILD_TESTS)
     include(CTest)
@@ -64,11 +78,31 @@ if(REX86_BUILD_TESTS)
         tests/unit/cpu_state_test.cpp
         tests/unit/guest_memory_test.cpp
         tests/unit/cpu_test.cpp
+        tests/unit/decoder_test.cpp
+        tests/unit/census_test.cpp
+        src/tools/census/census.cpp
     )
-    target_link_libraries(rex86_unit_tests PRIVATE rex86::core rex86_warnings)
+    # The decoder and census tests include internal headers under src/,
+    # which is deliberate: the public contract does not expose the decoder.
+    target_include_directories(rex86_unit_tests PRIVATE src)
+    target_link_libraries(rex86_unit_tests
+        PRIVATE rex86::core rex86_warnings rex86_zydis)
 
     add_executable(rex86_probe src/tools/probe/main.cpp)
     target_link_libraries(rex86_probe PRIVATE rex86::core rex86_warnings)
+
+    # The census tool reads dump files off the host filesystem, and
+    # measurement happens on native hosts, so it is not built under
+    # Emscripten; the decoder module itself builds everywhere.
+    if(NOT EMSCRIPTEN)
+        add_executable(rex86_census
+            src/tools/census/main.cpp
+            src/tools/census/census.cpp
+        )
+        target_include_directories(rex86_census PRIVATE src)
+        target_link_libraries(rex86_census
+            PRIVATE rex86::core rex86_warnings rex86_zydis)
+    endif()
 
     # Under Emscripten an executable is a .js loader plus a .wasm module, and
     # CTest runs it through Node.

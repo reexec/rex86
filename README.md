@@ -77,7 +77,7 @@ rex86은 [rePIU](https://github.com/nworkers/rePIU)와 [re2DJ](https://github.co
 | 단계 / Phase | 산출물 / Deliverable | 관련 목표 / Goals | 상태 / Status |
 |---|---|---|---|
 | 0 | 저장소, 공개 계약, 검증 하네스, 다섯 호스트 CI / repository, public contract, harness, five-host CI | 2, 4 | ✅ 완료 / done ([#1](https://github.com/reexec/rex86/issues/1), v0.0.2) |
-| 1 | 디코더, 인터프리터, 80비트 x87, census 이식, 대조 fuzz, trace / decoder, interpreter, 80-bit x87, census port, comparison fuzz, trace | 1, 2, 4 | ⬜ 미착수 / not started |
+| 1 | 디코더, 인터프리터, 80비트 x87, census 이식, 대조 fuzz, trace / decoder, interpreter, 80-bit x87, census port, comparison fuzz, trace | 1, 2, 4 | 🔶 진행 중 / in progress — 디코더와 census 도구 완료 / decoder and census tool done ([#5](https://github.com/reexec/rex86/issues/5)) |
 | 2A·2B | 소비자 통합(각 소비자 저장소) / consumer integration (in each consumer repo) | 2 | ⬜ 미착수 / not started |
 | 3 | IR 프런트엔드, wasm JIT 백엔드, SMC 검사 / IR frontend, wasm JIT backend, SMC checks | 2, 3 | ⬜ 미착수 / not started |
 | — | 벤치마크 하네스와 비교군 측정 / benchmark harness and comparator measurement | 3, 4 | ⬜ 미착수 / not started |
@@ -96,6 +96,8 @@ rex86은 [rePIU](https://github.com/nworkers/rePIU)와 [re2DJ](https://github.co
 | `include/rex86/` | 공개 계약: `cpu_state.h`, `guest_memory.h`, `environment.h`, `cpu.h`, `version.h` / the public contract |
 | `src/` | 코어 구현. OS 헤더를 포함하지 않음 / the core, with no OS header |
 | `src/tools/probe/` | `rex86_probe`: 모든 호스트에서 같은 줄을 찍는 확인 도구 / prints the same lines on every host |
+| `src/tools/census/` | `rex86_census`: 평탄 코드 이미지의 명령 census ([가이드](docs/guides/instruction-census.md)) / the instruction census over a flat code image |
+| `third_party/zydis/` | Zydis v4.1.1 amalgamation (MIT, [고지](THIRD_PARTY_NOTICES.md)) / the vendored decoder library |
 | `tests/unit/` | 단위 테스트 (외부 프레임워크 없음) / unit tests without a framework |
 | `docs/` | 설계, 작업 지시, 작업 로그, 분석, 지식 기반 / design, work orders, work logs, analysis, knowledge base |
 
