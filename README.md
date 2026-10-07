@@ -44,7 +44,7 @@ Windows는 `cmake -S . -B build -A Win32`, Linux i386은 `linux-x86-debug` prese
 ```cmake
 FetchContent_Declare(rex86
     GIT_REPOSITORY https://github.com/reexec/rex86.git
-    GIT_TAG v0.0.1)
+    GIT_TAG v0.0.2)
 FetchContent_MakeAvailable(rex86)
 target_link_libraries(your_target PRIVATE rex86::core)
 ```
