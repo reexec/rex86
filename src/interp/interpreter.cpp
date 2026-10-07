@@ -757,7 +757,9 @@ StepResult Step(CpuState& state, GuestMemory& memory,
     // every processor without it.
     const ZydisISASet isa = decoded.instruction.meta.isa_set;
     if (isa == ZYDIS_ISA_SET_RTM ||
-        (isa == ZYDIS_ISA_SET_X87 && !features.x87) ||
+        ((isa == ZYDIS_ISA_SET_X87 || isa == ZYDIS_ISA_SET_FCMOV ||
+          isa == ZYDIS_ISA_SET_FCOMI) &&
+         !features.x87) ||
         (isa == ZYDIS_ISA_SET_PENTIUMMMX && !features.mmx) ||
         (isa == ZYDIS_ISA_SET_SSE && !features.sse) ||
         ((isa == ZYDIS_ISA_SET_SSE2 || isa == ZYDIS_ISA_SET_SSE2MMX) &&

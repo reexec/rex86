@@ -14,4 +14,5 @@
 
 | 문서 | 내용 | 현재 상태 |
 | --- | --- | --- |
-| [singlesteptests-386ex-deviations.md](singlesteptests-386ex-deviations.md) | SingleStepTests 386EX 실측: 테스트 구조, SDM과 다른 하드웨어 동작(SIB scale-on-base, POPAD ESP), 인코딩 해석 주의 / facts measured from the 386EX suite: structure, SDM deviations, encoding notes | #11에서 확인, CALL 순서 1건 미해결 / confirmed in #11, one unresolved |
+| [x87-host-comparison.md](x87-host-comparison.md) | x87 호스트 CPU 대조(AMD Zen 3) 실측: SDM이 정하지 않은 동작, FPREM 부분 감소 N, 예외 우선순위, SDM 이탈 1종 / the x87 host-CPU comparison (AMD Zen 3): behavior the SDM leaves open, FPREM's partial reduction, exception priority, one SDM deviation | #19에서 확인(4,000만 건 불일치 0), Intel 미확정 / confirmed in #19 (40M cases, zero mismatches), Intel unresolved |
+| [singlesteptests-386ex-deviations.md](singlesteptests-386ex-deviations.md) | SingleStepTests 386EX 실측: 테스트 구조, SDM과 다른 하드웨어 동작(SIB scale-on-base, POPAD ESP), 인코딩 해석 주의 / facts measured from the 386EX suite: structure, SDM deviations, encoding notes | #11에서 확인, #17에서 unreal 결론 정정과 예외 전달 추가 / confirmed in #11, corrected and extended in #17 |

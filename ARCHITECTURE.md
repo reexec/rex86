@@ -12,17 +12,20 @@ flowchart TB
         STATE["CpuState [구현됨]"]
         MEM["GuestMemory + PageAttributeTable [구현됨]"]
         ENV["Environment, CodeCacheServices, Event [구현됨]"]
-        CPU["Cpu: 게이트, 인터럽트 라인, Run [구현됨, 엔진 없음]"]
+        CPU["Cpu: 게이트, 인터럽트 라인, Run [구현됨]"]
         DEC["decode/ Zydis 16/32비트 legacy [구현됨]"]
-        INT["interp/ [구현됨, 1차 명령 그룹]"]
+        INT["interp/ [구현됨, 정수 명령과 x87]"]
         IR["translate/ir/ [계획]"]
         WASM["translate/wasm/ [계획]"]
         A64["translate/aarch64/ [계획]"]
-        FPU["fpu/ 80비트 x87 [계획]"]
+        FPU["fpu/ 80비트 x87 수치 모델 [구현됨, 초월함수 제외]"]
+        SF["third_party/softfloat [구현됨]"]
     end
     HOST["소비자 (rePIU, re2DJ)"] -- "Environment 구현" --> ENV
     HOST -- "이미지 바이트" --> MEM
     CPU --> INT
+    INT --> FPU
+    FPU --> SF
     CPU --> IR
     IR --> WASM
     IR --> A64
@@ -34,7 +37,7 @@ flowchart TB
 |---|---|
 | `include/rex86/cpu_state.h` | `CpuState`: `gpr[8]`, `eip`, `eflags`, `segments[6]`(`SegmentRegister`: selector, base, limit, present, executable, writable, default_32bit), `X87State`(80비트 레지스터 8개, CW/SW/TW, 마지막 명령과 피연산자 포인터). `Reset()`은 Intel SDM 초기값(EFLAGS 비트 1, CW 0x037F, TW 0xFFFF, 평탄 세그먼트, CS만 실행 가능) |
 | `include/rex86/guest_memory.h` | `GuestMemory(base, size)`: 게스트 주소 A는 `base + A`, `base`가 null이면 identity. `Read/Write 8/16/32`, `ReadBytes/WriteBytes`, `HostPointer`. `PageAttributeTable`: 4 KiB 단위 `kMapped`, `kRead`, `kWrite`, `kExecute`, `kTranslated`. 접근은 범위와 페이지 속성을 통째로 검사한 뒤 수행 |
-| `include/rex86/environment.h` | `StopReason`(`kNoEngine`, `kBudgetExhausted`, `kGate`, `kSoftwareInterrupt`, `kPortIo`, `kFault`, `kHalted`, `kStopRequested`), `FaultKind`(rePIU `platform::FaultKind`와 re2DJ `NativeFaultKind`에 1:1, #17에서 SS 기준 limit 위반의 `kStackFault` 추가), `Event`(32비트 게스트 값만), `Descriptor`, `Features`(x87, mmx, sse, sse2, segments_16bit), `Environment`(LoadDescriptor, PortRead/Write, InterruptTarget, ReadTimeStampCounter, Cpuid, OnCodePageWritten), `CodeCacheServices`(Allocate, Release, BeginWrite, EndWrite) |
+| `include/rex86/environment.h` | `StopReason`(`kNoEngine`, `kBudgetExhausted`, `kGate`, `kSoftwareInterrupt`, `kPortIo`, `kFault`, `kHalted`, `kStopRequested`), `FaultKind`(rePIU `platform::FaultKind`와 re2DJ `NativeFaultKind`에 1:1, #17에서 SS 기준 limit 위반의 `kStackFault`, #19에서 x87 #MF의 `kFloatingPoint` 추가), `Event`(32비트 게스트 값만), `Descriptor`, `Features`(x87, mmx, sse, sse2, segments_16bit), `Environment`(LoadDescriptor, PortRead/Write, InterruptTarget, ReadTimeStampCounter, Cpuid, OnCodePageWritten), `CodeCacheServices`(Allocate, Release, BeginWrite, EndWrite) |
 | `include/rex86/cpu.h` | `Cpu(memory, environment, features, code_cache = nullptr)`. 게이트 집합(`RegisterGate`, `IsGate`), pending 인터럽트 256비트(`RaiseInterrupt`, `NextPendingInterrupt`: 높은 벡터 먼저), `Run(budget)`, `Step`, `RequestStop`, `InvalidateCode`, `ActiveEngine` |
 | `include/rex86/version.h` | `VersionString()`: `VERSION` 파일 값 |
 
@@ -47,12 +50,12 @@ flowchart TB
 | 디렉터리 | 역할 | 단계 |
 |---|---|---|
 | `src/decode/` | **[구현됨]** Zydis(16/32비트 legacy 모드) 래퍼 `Decoder`, `DecodedInstruction`(길이, 서명, x87, 제어 흐름) | 1 |
-| `src/interp/` | **[구현됨, 정수 명령 완결]** 인터프리터: `interp::Step`(한 명령), `access`(주소 생성·세그먼테이션·`LoadSegment`·SMC 검사), `flags`(즉시 계산), `exec_arith`(시프트·곱셈/나눗셈·비트 연산), `exec_strings`(문자열·문자열 포트 I/O+REP), `exec_segments`(세그먼트 적재, 같은 권한의 far 제어 흐름, IRET, 특권 명령 거절), `exec_bcd`(BCD, BOUND, SALC). 남은 것은 x87. 블록 캐시는 측정 뒤 | 1 |
-| `src/fpu/` | 80비트 x87 (SoftFloat 3 `extF80` 채택 후보) | 1 |
+| `src/interp/` | **[구현됨, 정수 명령 완결]** 인터프리터: `interp::Step`(한 명령), `access`(주소 생성·세그먼테이션·`LoadSegment`·SMC 검사), `flags`(즉시 계산), `exec_arith`(시프트·곱셈/나눗셈·비트 연산), `exec_strings`(문자열·문자열 포트 I/O+REP), `exec_segments`(세그먼트 적재, 같은 권한의 far 제어 흐름, IRET, 특권 명령 거절), `exec_bcd`(BCD, BOUND, SALC), `exec_x87`/`exec_x87_env`/`x87_stack`/`x87_access`(x87 명령, 레지스터 스택·태그·FIP/FDP, 환경 이미지, 다음 대기형 명령의 #MF). 블록 캐시는 측정 뒤 | 1 |
+| `src/fpu/` | **[구현됨, 초월함수 제외]** x87 수치 모델: `float80`(80비트 값과 분류), `x87_math`(SoftFloat 3e 위의 예외 의미·우선순위, 지수 조정 결과, C1, FPREM, FSCALE, FXTRACT, BCD, 상수). 디코드를 모르므로 번역 백엔드의 helper로 재사용 | 1 |
 | `src/translate/ir/` | x86 블록을 IR로. 플래그는 명시적 값, 죽은 플래그 제거 | 3 |
 | `src/translate/wasm/` | IR을 wasm 모듈 바이트열로. 인스턴스화는 호스트 JS | 3 |
 | `src/translate/aarch64/` | IR을 AArch64 기계어로. 코드 캐시는 `CodeCacheServices` | 5 |
-| `tests/host/<os>/` | 호스트 CPU 대조 fuzz(x86 호스트에서만), trace 생성 | 1 |
+| `tests/host/<os>/` | 호스트 CPU 대조 fuzz(x86 호스트에서만). **[구현됨]** `linux/x87_fuzz.cpp`(x87, [가이드](docs/guides/x87-host-fuzz.md)). 정수 명령 fuzz와 trace 생성은 계획 | 1 |
 | `src/tools/census/` | **[구현됨]** 독립 census: 평탄 이미지 + 진입점, 재귀 하강 하한과 선형 스윕 상한. [가이드](docs/guides/instruction-census.md) | 1 |
 | `src/tools/sst/` | **[구현됨]** SingleStepTests/80386(MIT) 러너. MOO v1.1 파서, 디코더 검증, 인터프리터 실행 비교(real mode limit 0xFFFF, 예외와 소프트웨어 인터럽트는 하네스가 IVT 전달을 흉내, #17). [가이드](docs/guides/singlesteptests.md) | 1 |
 | `third_party/zydis/` | **[구현됨]** Zydis v4.1.1 amalgamation(MIT), `rex86_zydis` STATIC, 코어에 PRIVATE 링크 | 1 |
@@ -74,6 +77,8 @@ flowchart TB
 | `rex86_unit_tests` | 실행 파일 | `tests/unit/`, CTest 등록. Emscripten에서는 `node`로 실행 |
 | `rex86_probe` | 실행 파일 | 모든 호스트에서 같은 `key=value` 줄 |
 | `rex86_zydis` | STATIC | Zydis v4.1.1 amalgamation. 경고 타깃 미적용, 코어에 PRIVATE 링크 |
+| `rex86_softfloat` | STATIC | Berkeley SoftFloat 3e(C, 8086 specialization). 경고 타깃 미적용, 코어에 PRIVATE 링크 |
+| `rex86_x87_fuzz` | 실행 파일 | x87 호스트 CPU 대조 fuzz. x86/x86-64 Linux에서만, 짧은 고정 시드로 ctest 등록 |
 | `rex86_census` | 실행 파일 | 명령 census 도구. Emscripten에서는 빌드하지 않음 |
 | `rex86_sst` | 실행 파일 | SingleStepTests 러너. Emscripten 제외, `REX86_SST_DIR`로 ctest 등록 |
 
