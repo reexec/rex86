@@ -96,6 +96,45 @@ SDM은 CS limit 밖 인출을 #GP로 정의한다. 지금 `Step`은 인출이 li
 
 *The SDM makes a fetch beyond the CS limit #GP. Today `Step` reports `kIllegalInstruction` when the fetch stops at the limit and the decode runs out of bytes, and `kAccessViolation` when not one byte is fetchable; a fetch truncated by the limit whose decode fails (or that fetched nothing) now raises `kGeneralProtection`, while a truncation by page attributes stays `kAccessViolation`. Whether the suite exercises this is measured after implementation and logged; a branch target beyond the CS limit (SDM: #GP at the branch) is handled in this task too if the suite exposes it.*
 
+## 구현 중 추가된 결정 / Decisions added during implementation
+
+첫 실행(결정 1~5만 적용)에서 1,467건 불일치가 나왔고, 원인은 모두 코어가 SDM과 어긋난 곳이었다. 하네스가 아니라 코어를 SDM 쪽으로 고쳤다.
+
+*The first run (decisions 1–5 only) showed 1,467 mismatches, all of them places where the core departed from the SDM; the core, not the harness, was brought to the SDM.*
+
+### 결정 6: 폴트는 정확하다(precise) / Decision 6: faults are precise
+
+SDM(Vol. 3A 6.5)은 폴트를 "명령 시작 전 상태로 되돌린 뒤 보고"로 정의한다. 코어의 POP m, LEAVE, ENTER, RET imm, IRET 등은 ESP/EBP를 바꾼 뒤 나중 접근이 폴트하면 바뀐 값을 남겼다(하드웨어는 되돌림: `8F.MOO` #623, `C9.MOO` #43, `C8.MOO` #49). 명령마다 되감기를 쓰는 대신 `interp::Step`이 실행 전 정수 상태(GPR, EFLAGS, 세그먼트 레지스터, 약 140바이트)를 저장하고 `kFault`면 복원한다. 예외는 REP 문자열 명령 하나다 — 완료된 반복의 인덱스·카운트 갱신은 아키텍처 상태이므로 `Ctx::keep_partial_state`로 유지한다. 이미 끝난 메모리 저장은 하드웨어와 같이 남는다. 기존 far CALL/RETF/IRET의 수동 ESP 복원은 이제 중복이지만 해가 없어 둔다.
+
+*The SDM (Vol. 3A 6.5) reports a fault with the state restored to before the instruction. The core's POP m, LEAVE, ENTER, RET imm, IRET and others left ESP/EBP changed when a later access faulted, where the hardware restores them (`8F.MOO` #623, `C9.MOO` #43, `C8.MOO` #49). Instead of per-instruction unwinding, `interp::Step` saves the integer state (GPRs, EFLAGS, segment registers — about 140 bytes) and restores it on `kFault`; the one exception is the REP string instructions, whose completed iterations' index and count updates are architectural and kept through `Ctx::keep_partial_state`. Memory stores already made stay, as on the hardware. The existing manual ESP restores in far CALL/RETF/IRET are now redundant but harmless and stay.*
+
+### 결정 7: near 분기 목적지는 피연산자 크기로 자르고 분기에서 CS limit을 검사한다 / Decision 7: near branch targets are truncated by operand size and checked against the CS limit at the branch
+
+코어는 near 분기 목적지를 CS.D로 잘랐다(16비트 코드면 `& 0xFFFF`). SDM JMP/Jcc/CALL/RET는 "`OperandSize = 16`이면 `EIP ← tempEIP AND 0000FFFFH`"로 **피연산자 크기**가 자른다. 16비트 코드의 o32 RET이 0xFFFF를 넘는 EIP를 꺼내면 386은 RET 자체에서 #GP를 낸다(`66C3.MOO` #5). 목적지 마스크를 피연산자 크기로 바꾸고, `Step`이 실행 후 분기가 실제로 일어났으면(목적지 ≠ fallthrough 또는 CS 변경) 새 CS limit으로 검사해 #GP(결정 6으로 상태 복원)를 낸다. near CALL은 SDM 순서대로 push 전에 검사한다(`CheckBranchTarget`). far CALL은 push 뒤 CS를 적재하므로 limit 밖 목적지면 SP 아래에 반환 주소가 남는다 — SP 아래 메모리라 프로그램이 관찰할 수 없고, 평탄 32비트 소비자에서는 일어나지 않는다.
+
+*The core truncated near branch targets by CS.D (`& 0xFFFF` in 16-bit code); the SDM's JMP/Jcc/CALL/RET truncate by **operand size** ("IF OperandSize = 16 THEN EIP ← tempEIP AND 0000FFFFH"). An o32 RET in 16-bit code popping an EIP above 0xFFFF faults #GP at the RET on the 386 (`66C3.MOO` #5). The target mask now follows operand size, and `Step` checks a taken branch (target ≠ fallthrough, or CS changed) against the new CS limit, raising #GP with decision 6's restore; near CALL checks before its push, in SDM order (`CheckBranchTarget`). Far CALL loads CS after its pushes, so a beyond-limit far target leaves the return address below SP — memory the program cannot observe, and a case flat 32-bit consumers never meet.*
+
+### 결정 8: 메모리 대상 비트 연산은 피연산자 크기 단위로 접근한다 / Decision 8: memory bit operations access one operand-size unit
+
+SDM BT는 레지스터 비트 오프셋의 메모리 접근을 "16비트 피연산자는 `EA + 2 × floor(offset / 16)`의 2바이트, 32비트는 `EA + 4 × floor(offset / 32)`의 4바이트"로 기술한다. 코어는 1바이트만 읽어, 워드가 limit을 넘는 경우의 #GP를 놓쳤다(`670FA3.MOO` #459: ECX=0xFFFF, DI=0). BT/BTS/BTR/BTC를 피연산자 크기 단위 접근으로 바꿨다. 선택되는 비트는 같다.
+
+*The SDM's BT describes a register-offset memory access as two bytes at `EA + 2 × floor(offset / 16)` for 16-bit operands and four at `EA + 4 × floor(offset / 32)` for 32-bit ones. The core read a single byte and missed the #GP when the word crosses the limit (`670FA3.MOO` #459: ECX=0xFFFF, DI=0); BT/BTS/BTR/BTC now access one operand-size unit, selecting the same bit.*
+
+### 결정 9: SDM이 정하지 않은 곳의 386 실측 채택 / Decision 9: measured 386 behavior where the SDM is silent
+
+* **PUSHA/PUSHAD의 저장 순서**: 이미지(EAX가 가장 높은 주소, EDI가 가장 낮은 주소)는 SDM 그대로이고, 386EX는 **가장 낮은 슬롯부터** 저장하다가 limit을 넘는 슬롯에서 폴트한다(`6660.MOO` #302: EDI/ESI/EBP/ESP 슬롯만 기록됨). 폴트 시 메모리의 부분 상태는 SDM이 정하지 않으므로 실측 순서를 채택한다. SP는 성공해야만 움직인다.
+* **32비트 POP sreg는 워드만 읽는다**: 상위 워드는 SDM상 버려지는 값이고, 386EX는 그 워드에 limit 폴트를 내지 않는다(`6607.MOO` #4: SP=0xFFFE에서 폴트 없이 SP=0x0002). 선택자 워드만 읽고 SP를 4 올린다.
+* **RTM(XBEGIN/XABORT)은 #UD**: Zydis는 `C7 F8`/`C6 F8`을 RTM으로 디코드하지만 이 코어의 CPU에는 RTM이 없다. RTM이 없는 모든 프로세서처럼 #UD다(`C7.MOO` #1865).
+
+*PUSHA/PUSHAD keep the SDM's image (EAX highest, EDI lowest) but store from the lowest slot up as the 386EX does, faulting at the slot that crosses the limit (`6660.MOO` #302 records only the EDI/ESI/EBP/ESP slots); the SDM leaves partial memory under a fault unspecified, so the measured order is adopted, and SP moves only on success. A 32-bit POP sreg reads only the selector word — the upper word is discarded per the SDM, and the 386EX takes no limit fault for it (`6607.MOO` #4: at SP=0xFFFE, no fault, SP=0x0002) — and adds four to SP. RTM's XBEGIN/XABORT, which Zydis decodes from `C7 F8`/`C6 F8`, raise #UD as on every processor without RTM (`C7.MOO` #1865).*
+
+### SDM과 다른 하드웨어 동작(반영하지 않음) / Hardware deviations not adopted
+
+* **POPA/POPAD의 부분 커밋**: 386EX는 limit을 넘는 슬롯 전에 꺼낸 레지스터를 커밋한 채 #SS를 낸다(`6661.MOO` #681). 결정 6(SDM의 정확한 폴트)과 어긋나므로 코어는 SDM을 따르고, 하네스는 첫 슬롯이 아닌 곳에서 폴트하는 POPA를 `skipped_hw_quirk`로 센다(3건).
+* **AAM 0의 플래그**: 양쪽 모두 #DE지만 386EX는 폴트 전에 SF/ZF/PF를 바꾼다(ZF=SF=0, PF는 아직 규칙을 찾지 못함, 10건). 하네스는 AAM 0에서 이 세 플래그만 비교에서 빼고(레지스터와 push된 이미지 모두) 나머지는 비교한다.
+
+*POPA/POPAD commit the registers popped before the slot crossing the limit and then raise #SS on the 386EX (`6661.MOO` #681); that contradicts decision 6's SDM precise fault, so the core keeps the SDM and the harness counts POPAs faulting beyond the first slot as `skipped_hw_quirk` (3 tests). AAM 0 raises #DE on both sides, but the 386EX has already rewritten SF/ZF/PF (ZF=SF=0, PF by a rule not yet found, 10 tests); the harness drops only those three flags from the comparison (register and pushed image) and compares everything else.*
+
 ## README / README
 
 * 첫머리 경고 상자: "아직 실행 엔진이 없다"를 인터프리터의 현재 상태(정수 명령, SST 결과, 번역 백엔드·x87 미구현)로 바꾼다.

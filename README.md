@@ -14,9 +14,9 @@ rex86은 [rePIU](https://github.com/nworkers/rePIU)와 [re2DJ](https://github.co
 *rex86 is the IA-32 user-mode CPU core library shared by [rePIU](https://github.com/nworkers/rePIU) and [re2DJ](https://github.com/nworkers/re2DJ). Both run original 32-bit x86 game executables unmodified, replacing only the surrounding environment with HLE. On desktop hosts whose CPU is x86 they execute the original bytes directly; a browser (WebAssembly) and an ARM device cannot, and rex86 gives those hosts a CPU. The core knows the CPU alone: the guest executable format (LE, PE32), the operating system (DOS, Win32), the graphics API and the assets are supplied by the consumer projects through the host contract (`rex86::Environment`). See [VERSION](VERSION) for the current version.*
 
 > [!WARNING]
-> 아직 실행 엔진이 없습니다. #1은 저장소 규칙, 공개 계약(CPU 상태, 게스트 메모리 뷰, 호스트 계약), 검증 하네스, 다섯 호스트의 CI까지입니다. 인터프리터는 다음 작업입니다.
+> 개발 중입니다. 실행 엔진은 인터프리터 하나이고, IA-32 정수 명령 전체와 그 예외 의미를 [SingleStepTests/80386](https://github.com/SingleStepTests/80386) 실측과 대조해 통과합니다(실행 1,741,900건, 불일치 0). x87, 번역 백엔드(wasm·AArch64 JIT), 호스트 CPU 대조 fuzz는 아직 없고, 소비자(rePIU, re2DJ) 통합 전입니다.
 >
-> *There is no execution engine yet. #1 delivers the repository rules, the public contract (CPU state, guest memory view, host contract), the verification harness and CI on five hosts. The interpreter is the next task.*
+> *Work in progress. The only execution engine is the interpreter, which passes the whole IA-32 integer set and its exception semantics against the [SingleStepTests/80386](https://github.com/SingleStepTests/80386) hardware measurements (1,741,900 executed tests, zero mismatches). x87, the translation backends (wasm and AArch64 JIT) and the host-CPU comparison fuzz do not exist yet, and the consumers (rePIU, re2DJ) are not integrated.*
 
 ## 목표와 달성도 / Goals and status
 
@@ -120,7 +120,7 @@ trace 기록·재생, 단일 스텝, 상태 덤프를 코어가 제공합니다.
 | 단계 / Phase | 산출물 / Deliverable | 관련 목표 / Goals | 상태 / Status |
 |---|---|---|---|
 | 0 | 저장소, 공개 계약, 검증 하네스, 다섯 호스트 CI / repository, public contract, harness, five-host CI | 2, 4 | ✅ 완료 / done ([#1](https://github.com/reexec/rex86/issues/1), v0.0.2) |
-| 1 | 디코더, 인터프리터, 80비트 x87, census 이식, 대조 fuzz, trace / decoder, interpreter, 80-bit x87, census port, comparison fuzz, trace | 1, 2, 4, 9 | 🔶 진행 중 / in progress — 디코더·census 도구([#5](https://github.com/reexec/rex86/issues/5)), SingleStepTests 러너([#7](https://github.com/reexec/rex86/issues/7)), 인터프리터 1~3차: **정수 명령 전체**, SST 실행 비교 159만 테스트 불일치 0·미구현 0([#11](https://github.com/reexec/rex86/issues/11), [#13](https://github.com/reexec/rex86/issues/13), [#15](https://github.com/reexec/rex86/issues/15)). 남은 것: x87, 대조 fuzz, trace / decoder, census tool, SingleStepTests runner, interpreter increments 1-3 (**the whole integer set**: 1.59M SST tests, zero mismatches, zero unimplemented). Remaining: x87, comparison fuzz, trace |
+| 1 | 디코더, 인터프리터, 80비트 x87, census 이식, 대조 fuzz, trace / decoder, interpreter, 80-bit x87, census port, comparison fuzz, trace | 1, 2, 4, 9 | 🔶 진행 중 / in progress — 디코더·census 도구([#5](https://github.com/reexec/rex86/issues/5)), SingleStepTests 러너([#7](https://github.com/reexec/rex86/issues/7)), 인터프리터 1~3차: **정수 명령 전체**([#11](https://github.com/reexec/rex86/issues/11), [#13](https://github.com/reexec/rex86/issues/13), [#15](https://github.com/reexec/rex86/issues/15)), **예외 의미**: #GP/#SS/#UD/#DE/BOUND와 INT n을 IVT 전달까지 비교, 정확한 폴트([#17](https://github.com/reexec/rex86/issues/17)). SST 실행 174만 테스트 불일치 0·미구현 0. 남은 것: x87, 대조 fuzz, trace / decoder, census tool, SingleStepTests runner, interpreter increments 1-3 (**the whole integer set**), **exception semantics** (#GP/#SS/#UD/#DE/BOUND and INT n compared through IVT delivery, precise faults, #17): 1.74M SST tests executed, zero mismatches, zero unimplemented. Remaining: x87, comparison fuzz, trace |
 | 2A·2B | 소비자 통합(각 소비자 저장소) / consumer integration (in each consumer repo) | 2 | ⬜ 미착수 / not started |
 | 3 | IR 프런트엔드, wasm JIT 백엔드, SMC 검사 / IR frontend, wasm JIT backend, SMC checks | 2, 3, 8 | ⬜ 미착수 / not started |
 | — | 벤치마크 하네스와 비교군 측정 / benchmark harness and comparator measurement | 3, 4, 7, 8 | ⬜ 미착수 / not started |
@@ -129,9 +129,9 @@ trace 기록·재생, 단일 스텝, 상태 덤프를 코어가 제공합니다.
 | 5 | AArch64 JIT 백엔드 / AArch64 JIT backend | 1, 3 | ⬜ 미착수 / not started |
 | 6 | ARM 네이티브 호스트(소비자 저장소) / ARM native hosts (consumer repos) | 3 | ⬜ 미착수 / not started |
 
-현재 명령 커버리지 0% (엔진 없음), 성능 측정치 없음. 1단계부터 이 절에 수치를 누적합니다.
+현재 수치(#17 기준): SingleStepTests/80386 real mode 941 파일 1,758,700 테스트 중 **1,741,900건 실행, 불일치 0, 미구현 0**(예외 기록 테스트 149,100건 포함). 실행하지 않은 16,800건은 설계상 경계(포트 입력, 특권 명령 8,893), SDM과 다른 386EX 동작(무효 SIB 등 7,903), 하네스로 표현할 수 없는 경우(4)입니다. 소비자 census 대비 커버리지와 성능 측정치는 아직 없습니다.
 
-*Phases follow the [design document](docs/design/20261007-i001-repository-and-public-contract.md)'s plan; the table is updated as work merges. Current instruction coverage is 0% (no engine) and no performance figure exists yet; numbers accumulate in this section from phase 1 on.*
+*Phases follow the [design document](docs/design/20261007-i001-repository-and-public-contract.md)'s plan; the table is updated as work merges. Current figures (as of #17): of SingleStepTests/80386's 1,758,700 real-mode tests in 941 files, **1,741,900 executed with zero mismatches and zero unimplemented** (149,100 exception-recording tests included). The 16,800 not executed are design boundaries (port input and privileged instructions, 8,893), 386EX behavior deviating from the SDM (invalid SIB and others, 7,903) and cases the harness cannot represent (4). Coverage against the consumer census and performance figures do not exist yet.*
 
 ## 구조 / Layout
 
