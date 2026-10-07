@@ -67,7 +67,16 @@ struct DecodedInstruction
 class Decoder
 {
 public:
-    Decoder();
+    // The default operand/address size of the code being decoded. kLegacy32
+    // is the core's 32-bit flat code; kLegacy16 serves 16-bit code segments
+    // (Features::segments_16bit) and real-mode test suites.
+    enum class Mode : std::uint8_t
+    {
+        kLegacy32,
+        kLegacy16,
+    };
+
+    explicit Decoder(Mode mode = Mode::kLegacy32);
 
     // Decodes one instruction at guest_address from at most `length` bytes.
     // Returns false when the bytes do not form a valid 32-bit instruction.

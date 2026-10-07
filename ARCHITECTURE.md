@@ -54,6 +54,7 @@ flowchart TB
 | `src/translate/aarch64/` | IR을 AArch64 기계어로. 코드 캐시는 `CodeCacheServices` | 5 |
 | `tests/host/<os>/` | 호스트 CPU 대조 fuzz(x86 호스트에서만), trace 생성 | 1 |
 | `src/tools/census/` | **[구현됨]** 독립 census: 평탄 이미지 + 진입점, 재귀 하강 하한과 선형 스윕 상한. [가이드](docs/guides/instruction-census.md) | 1 |
+| `src/tools/sst/` | **[구현됨]** SingleStepTests/80386(MIT) 러너. MOO v1.1 파서와 1차 디코더 검증, 2차는 인터프리터 실행 비교. [가이드](docs/guides/singlesteptests.md) | 1 |
 | `third_party/zydis/` | **[구현됨]** Zydis v4.1.1 amalgamation(MIT), `rex86_zydis` STATIC, 코어에 PRIVATE 링크 | 1 |
 
 디코더는 코어 내부 모듈이다. 공개 헤더는 Zydis 타입을 노출하지 않으므로 디코더는 공개 계약 변경 없이 교체 가능하다.
@@ -74,6 +75,7 @@ flowchart TB
 | `rex86_probe` | 실행 파일 | 모든 호스트에서 같은 `key=value` 줄 |
 | `rex86_zydis` | STATIC | Zydis v4.1.1 amalgamation. 경고 타깃 미적용, 코어에 PRIVATE 링크 |
 | `rex86_census` | 실행 파일 | 명령 census 도구. Emscripten에서는 빌드하지 않음 |
+| `rex86_sst` | 실행 파일 | SingleStepTests 러너. Emscripten 제외, `REX86_SST_DIR`로 ctest 등록 |
 
 `REX86_BUILD_TESTS`는 최상위 프로젝트일 때만 기본 ON이므로 FetchContent 소비자는 라이브러리만 받는다. CI는 Windows x86(MSVC), Linux x64(GCC, Clang), Linux i386(Debian 컨테이너), Linux AArch64(`ubuntu-24.04-arm`), wasm32(Emscripten, Node)의 다섯 작업이 모든 브랜치 push에서 돈다.
 

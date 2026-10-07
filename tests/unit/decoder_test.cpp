@@ -108,4 +108,25 @@ void RunDecoderTests(rex86::test::Context& context)
 
     // Empty input is not an instruction either.
     REX86_CHECK(context, !decoder.Decode(nullptr, 0, 0xE000, &decoded));
+
+    // The 16-bit mode flips the default operand size: B8 imm is 3 bytes
+    // (mov ax, imm16), and the 0x66 prefix widens it back to imm32.
+    const Decoder decoder16(Decoder::Mode::kLegacy16);
+    REX86_CHECK(context,
+                DecodeBytes(decoder16, {0xB8, 0x34, 0x12}, 0x1000, &decoded));
+    REX86_CHECK_EQ(context, decoded.Length(), 3U);
+    REX86_CHECK_EQ(context, decoded.OperandSignature(), "r16,i16");
+    REX86_CHECK(context,
+                DecodeBytes(decoder16,
+                            {0x66, 0xB8, 0x78, 0x56, 0x34, 0x12}, 0x1000,
+                            &decoded));
+    REX86_CHECK_EQ(context, decoded.Length(), 6U);
+    REX86_CHECK_EQ(context, decoded.OperandSignature(), "r32,i32");
+
+    // A 16-bit relative jump target wraps within the 64 KiB code segment.
+    REX86_CHECK(context, DecodeBytes(decoder16, {0xEB, 0xFE}, 0x2000,
+                                     &decoded));
+    REX86_CHECK(context, decoded.Flow() == ControlFlow::kDirectJump);
+    REX86_CHECK(context, decoded.DirectTarget(&target));
+    REX86_CHECK_EQ(context, target, 0x2000U);
 }
