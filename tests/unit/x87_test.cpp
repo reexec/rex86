@@ -78,6 +78,13 @@ void PutDouble(Machine* m, const std::uint32_t at, const double value)
     std::memcpy(&m->buffer[at], &value, sizeof value);
 }
 
+// The double-precision default QNaN, 0x7FF8000000000000.
+void PutQuietNaN(Machine* m, const std::uint32_t at)
+{
+    const std::uint64_t bits = 0x7FF8000000000000ull;
+    std::memcpy(&m->buffer[at], &bits, sizeof bits);
+}
+
 double GetDouble(const Machine& m, const std::uint32_t at)
 {
     double value = 0;
@@ -207,6 +214,31 @@ void RunX87Tests(rex86::test::Context& context)
         REX86_CHECK(context, (flags & rex86::kEflagsCarry) != 0);  // 0 < 1
         REX86_CHECK(context, (flags & rex86::kEflagsZero) == 0);
         REX86_CHECK(context, (flags & rex86::kEflagsOverflow) == 0);
+    }
+    {
+        // An unmasked #IA in a compare leaves the condition codes and the
+        // stack alone (SDM: "flags not set if unmasked #IA"); the masked
+        // compare reports unordered and pops.
+        Machine m({0xD9, 0x2B,              // fldcw [ebx]
+                   0xDD, 0x43, 0x08,        // fld qword [ebx+8]  (QNaN)
+                   0xD9, 0xE8,              // fld1
+                   0xD8, 0xD9,              // fcomp st(1)
+                   0xF4});
+        m.buffer[Machine::kData] = 0x7E;  // CW 0x037E: IE unmasked
+        m.buffer[Machine::kData + 1] = 0x03;
+        PutQuietNaN(&m, Machine::kData + 8);
+        REX86_CHECK(context, m.cpu.Run(100).reason == StopReason::kHalted);
+        const std::uint16_t sw = m.cpu.state().x87.status_word;
+        REX86_CHECK(context, (sw & 0x0081u) == 0x0081u);       // IE, ES
+        REX86_CHECK_EQ(context, sw & 0x4500u, 0u);              // C3/C2/C0 untouched
+        REX86_CHECK_EQ(context, (sw >> 11) & 7u, 6u);           // no pop
+
+        Machine masked({0xDD, 0x43, 0x08, 0xD9, 0xE8, 0xD8, 0xD9, 0xF4});
+        PutQuietNaN(&masked, Machine::kData + 8);
+        REX86_CHECK(context, masked.cpu.Run(100).reason == StopReason::kHalted);
+        const std::uint16_t msw = masked.cpu.state().x87.status_word;
+        REX86_CHECK_EQ(context, msw & 0x4500u, 0x4500u);        // unordered
+        REX86_CHECK_EQ(context, (msw >> 11) & 7u, 7u);          // popped
     }
     {
         // With Features::x87 off an x87 instruction is illegal.

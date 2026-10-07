@@ -515,10 +515,15 @@ ExecStatus ExecCompare(Ctx* ctx, const ZydisMnemonic mnemonic)
         other = x87::Read(x87, i);
     }
 
-    // A compare that faults reports "unordered" even when the exception is
-    // unmasked; only the pop is withheld (measured, #19).
+    // A compare that faults withholds its pops when the exception is
+    // unmasked. The condition codes follow the SDM's tables: "flags not
+    // set if unmasked #IA" -- the AMD Zen 3 host sets them to unordered
+    // anyway, a deviation the host fuzz counts apart. An unmasked stack
+    // fault (#IS) and an unmasked #D still report the relation (measured,
+    // design #19).
     fpu::Relation relation = fpu::Relation::kUnordered;
     bool completed = true;
+    bool report = true;
     if (x87::IsEmpty(x87, 0) || other_empty)
     {
         completed = StackFault(&x87, false);
@@ -528,12 +533,18 @@ ExecStatus ExecCompare(Ctx* ctx, const ZydisMnemonic mnemonic)
         completed = fpu::Compare(&status, x87::Read(x87, 0), other, quiet,
                                  &relation,
                                  fpu::OperandHints{false, other_denormal});
+        report = (status.raised & fpu::kInvalid) == 0 ||
+            !status.Unmasked(fpu::kInvalid);
         if (!to_eflags)
         {
             // FCOMI and FUCOMI leave C1 alone.
             x87::SetConditions(&x87, kC1, 0);
         }
         x87::Raise(&x87, status.raised);
+    }
+    if (!report)
+    {
+        return ExecStatus::kContinue;
     }
     if (to_eflags)
     {

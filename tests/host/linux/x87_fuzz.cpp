@@ -491,6 +491,47 @@ std::string Difference(const Outcome& host, const Outcome& core)
     return {};
 }
 
+bool IsCompare(const std::string& mnemonic)
+{
+    static const char* const kCompares[] = {"fcom", "fcomp", "fcompp", "fucom",
+                                            "fucomp", "fucompp", "ficom", "ficomp",
+                                            "fcomi", "fcomip", "fucomi", "fucomip",
+                                            "ftst"};
+    const std::string base = mnemonic.substr(0, mnemonic.find(' '));
+    for (const char* name : kCompares)
+    {
+        if (base == name) return true;
+    }
+    return false;
+}
+
+// A known vendor deviation from the SDM, counted apart: the SDM's FCOM
+// and FCOMI tables say "flags not set if unmasked #IA", while the AMD Zen 3
+// host reports unordered (C3/C2/C0 = 111, or ZF/PF/CF = 111) anyway. The
+// core follows the SDM; see docs/analysis/x87-host-comparison.md.
+bool UnmaskedInvalidCompareFlags(const std::string& mnemonic, const Input& input,
+                                 const Outcome& host, const Outcome& core)
+{
+    if (!IsCompare(mnemonic) || (input.image[0] & 1u) != 0)
+    {
+        return false;  // not a compare, or #IA masked
+    }
+    if ((host.image[4] & 1u) == 0)
+    {
+        return false;  // no #IA raised
+    }
+    Outcome patched = core;
+    std::memcpy(patched.image + 4, host.image + 4, 2);  // SW
+    patched.flags = (core.flags & ~0x8D5u) | (host.flags & 0x8D5u);
+    const std::uint16_t sw_diff = static_cast<std::uint16_t>(
+        (host.image[4] | (host.image[5] << 8)) ^ (core.image[4] | (core.image[5] << 8)));
+    if ((sw_diff & ~0x4500u) != 0)
+    {
+        return false;  // something besides C3/C2/C0 differs
+    }
+    return Difference(host, patched).empty();
+}
+
 std::vector<std::uint8_t> FromHex(const char* text)
 {
     std::vector<std::uint8_t> bytes;
@@ -578,6 +619,7 @@ int main(int argc, char** argv)
     std::map<std::string, std::uint64_t> failures;
     std::uint64_t mismatches = 0;
     std::uint64_t core_stops = 0;
+    std::uint64_t vendor_deviations = 0;
     for (std::uint64_t n = 0; n < iterations; ++n)
     {
         const Form& form = forms[gen.Bits(32) % forms.size()];
@@ -601,6 +643,12 @@ int main(int argc, char** argv)
         else
         {
             difference = Difference(expected, actual);
+            if (!difference.empty() &&
+                UnmaskedInvalidCompareFlags(form.mnemonic, input, expected, actual))
+            {
+                ++vendor_deviations;
+                difference.clear();
+            }
         }
         if (!difference.empty())
         {
@@ -615,11 +663,13 @@ int main(int argc, char** argv)
             }
         }
     }
-    std::printf("forms=%zu iterations=%llu seed=%llu mismatches=%llu core_stops=%llu\n",
+    std::printf("forms=%zu iterations=%llu seed=%llu mismatches=%llu core_stops=%llu "
+                "vendor_deviations=%llu\n",
                 forms.size(), static_cast<unsigned long long>(iterations),
                 static_cast<unsigned long long>(seed),
                 static_cast<unsigned long long>(mismatches),
-                static_cast<unsigned long long>(core_stops));
+                static_cast<unsigned long long>(core_stops),
+                static_cast<unsigned long long>(vendor_deviations));
     for (const auto& [mnemonic, count] : failures)
     {
         std::printf("  %-24s %llu\n", mnemonic.c_str(), static_cast<unsigned long long>(count));
