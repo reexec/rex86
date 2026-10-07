@@ -256,14 +256,159 @@ void RunInterpTests(rex86::test::Context& context)
         REX86_CHECK_EQ(context, c.cpu.state().Get(Gpr::kEdx), 4u);
     }
     {
-        // An instruction outside this increment reports kIllegalInstruction
-        // rather than quietly doing nothing: here MUL (a later increment).
-        Machine m({0xF7, 0xE3,  // mul ebx
+        // An instruction outside the implemented increments reports
+        // kIllegalInstruction rather than quietly doing nothing: here AAA
+        // (BCD, a later increment).
+        Machine m({0x37,  // aaa
                    0xF4});
         const rex86::Event event = m.cpu.Run(100);
         REX86_CHECK(context, event.reason == StopReason::kFault);
         REX86_CHECK(context,
                     event.fault_kind == rex86::FaultKind::kIllegalInstruction);
         REX86_CHECK_EQ(context, event.instructions_retired, std::uint64_t{0});
+    }
+
+    // --- increment 2 (#13) ---
+    {
+        // SHL: CF takes the last bit out, OF is defined at count 1; a
+        // zero count touches nothing.
+        Machine m({0xB0, 0x81,        // mov al, 0x81
+                   0xC0, 0xE0, 0x01,  // shl al, 1
+                   0xF4});
+        m.cpu.Run(100);
+        REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEax) & 0xFFu, 0x02u);
+        REX86_CHECK(context, (m.cpu.state().eflags & rex86::kEflagsCarry) != 0);
+        REX86_CHECK(context,
+                    (m.cpu.state().eflags & rex86::kEflagsOverflow) != 0);
+    }
+    {
+        // RCR rotates through CF: 1 rcr 1 with CF set gives the sign bit
+        // and leaves CF = old bit 0.
+        Machine m({0xF9,              // stc
+                   0xB0, 0x01,        // mov al, 1
+                   0xD0, 0xD8,        // rcr al, 1
+                   0xF4});
+        m.cpu.Run(100);
+        REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEax) & 0xFFu, 0x80u);
+        REX86_CHECK(context, (m.cpu.state().eflags & rex86::kEflagsCarry) != 0);
+    }
+    {
+        // MUL fills the high half and sets CF/OF when it is significant.
+        Machine m({0xB8, 0x00, 0x00, 0x00, 0x80,  // mov eax, 0x80000000
+                   0xBB, 0x04, 0x00, 0x00, 0x00,  // mov ebx, 4
+                   0xF7, 0xE3,                    // mul ebx
+                   0xF4});
+        m.cpu.Run(100);
+        REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEax), 0u);
+        REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEdx), 2u);
+        REX86_CHECK(context, (m.cpu.state().eflags & rex86::kEflagsCarry) != 0);
+    }
+    {
+        // Division by zero faults with kDivide, retires nothing and
+        // leaves EIP at the instruction.
+        Machine m({0x31, 0xDB,  // xor ebx, ebx
+                   0xF7, 0xF3,  // div ebx
+                   0xF4});
+        const rex86::Event event = m.cpu.Run(100);
+        REX86_CHECK(context, event.reason == StopReason::kFault);
+        REX86_CHECK(context, event.fault_kind == rex86::FaultKind::kDivide);
+        REX86_CHECK_EQ(context, event.instructions_retired, std::uint64_t{1});
+        REX86_CHECK_EQ(context, m.cpu.state().eip, Machine::kCodeBase + 2);
+    }
+    {
+        // IDIV: -7 / 2 = -3 remainder -1.
+        Machine m({0xB8, 0xF9, 0xFF, 0xFF, 0xFF,  // mov eax, -7
+                   0x99,                          // cdq
+                   0xBB, 0x02, 0x00, 0x00, 0x00,  // mov ebx, 2
+                   0xF7, 0xFB,                    // idiv ebx
+                   0xF4});
+        m.cpu.Run(100);
+        REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEax), 0xFFFFFFFDu);
+        REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEdx), 0xFFFFFFFFu);
+    }
+    {
+        // REP MOVSB copies ECX bytes and leaves it zero; DF=0 ascends.
+        Machine m({0xBE, 0x00, 0x20, 0x00, 0x00,  // mov esi, 0x2000
+                   0xBF, 0x00, 0x30, 0x00, 0x00,  // mov edi, 0x3000
+                   0xB9, 0x04, 0x00, 0x00, 0x00,  // mov ecx, 4
+                   0xF3, 0xA4,                    // rep movsb
+                   0xF4});
+        const char source[4] = {'r', 'e', 'x', '!'};
+        m.memory.WriteBytes(0x2000,
+                            reinterpret_cast<const std::uint8_t*>(source), 4);
+        const rex86::Event event = m.cpu.Run(100);
+        REX86_CHECK(context, event.reason == StopReason::kHalted);
+        REX86_CHECK_EQ(context, event.instructions_retired, std::uint64_t{5});
+        std::uint32_t copied = 0;
+        m.memory.Read32(0x3000, &copied);
+        REX86_CHECK_EQ(context, copied, 0x21786572u);  // "rex!"
+        REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEcx), 0u);
+        REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEsi), 0x2004u);
+    }
+    {
+        // REPNE SCASB finds the byte and stops with ZF set.
+        Machine m({0xBF, 0x00, 0x20, 0x00, 0x00,  // mov edi, 0x2000
+                   0xB9, 0x10, 0x00, 0x00, 0x00,  // mov ecx, 16
+                   0xB0, 0x58,                    // mov al, 'X'
+                   0xF2, 0xAE,                    // repne scasb
+                   0xF4});
+        m.memory.Write8(0x2003, 'X');
+        m.cpu.Run(100);
+        REX86_CHECK(context, (m.cpu.state().eflags & rex86::kEflagsZero) != 0);
+        REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEdi), 0x2004u);
+        REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEcx), 12u);
+    }
+    {
+        // BTS over memory addresses bits beyond the operand: bit 35 of
+        // [0x2000] is bit 3 of byte 0x2004.
+        Machine m({0xBB, 0x00, 0x20, 0x00, 0x00,  // mov ebx, 0x2000
+                   0xB8, 0x23, 0x00, 0x00, 0x00,  // mov eax, 35
+                   0x0F, 0xAB, 0x03,              // bts [ebx], eax
+                   0xF4});
+        m.cpu.Run(100);
+        std::uint8_t byte = 0;
+        m.memory.Read8(0x2004, &byte);
+        REX86_CHECK_EQ(context, byte, 0x08u);
+        REX86_CHECK(context, (m.cpu.state().eflags & rex86::kEflagsCarry) == 0);
+    }
+    {
+        // BSF on zero sets ZF and preserves the destination; otherwise it
+        // finds the lowest set bit.
+        Machine m({0xB8, 0x2A, 0x00, 0x00, 0x00,  // mov eax, 42
+                   0x31, 0xDB,                    // xor ebx, ebx
+                   0x0F, 0xBC, 0xC3,              // bsf eax, ebx
+                   0xF4});
+        m.cpu.Run(100);
+        REX86_CHECK(context, (m.cpu.state().eflags & rex86::kEflagsZero) != 0);
+        REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEax), 42u);
+
+        Machine n({0xBB, 0x30, 0x00, 0x00, 0x00,  // mov ebx, 0x30
+                   0x0F, 0xBC, 0xC3,              // bsf eax, ebx
+                   0xF4});
+        n.cpu.Run(100);
+        REX86_CHECK_EQ(context, n.cpu.state().Get(Gpr::kEax), 4u);
+    }
+    {
+        // SETNZ writes exactly one byte from the condition.
+        Machine m({0x31, 0xC0,        // xor eax, eax  (ZF=1)
+                   0x0F, 0x95, 0xC3,  // setnz bl
+                   0x40,              // inc eax       (ZF=0)
+                   0x0F, 0x95, 0xC1,  // setnz cl
+                   0xF4});
+        m.cpu.Run(100);
+        REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEbx) & 0xFFu, 0u);
+        REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEcx) & 0xFFu, 1u);
+    }
+    {
+        // ENTER 8,0 and LEAVE restore the frame exactly.
+        Machine m({0xC8, 0x08, 0x00, 0x00,  // enter 8, 0
+                   0xC9,                    // leave
+                   0xF4});
+        const std::uint32_t old_ebp = 0x1234;
+        m.cpu.state().Set(Gpr::kEbp, old_ebp);
+        m.cpu.Run(100);
+        REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEbp), old_ebp);
+        REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEsp),
+                       Machine::kStackTop);
     }
 }

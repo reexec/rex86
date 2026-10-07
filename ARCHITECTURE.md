@@ -47,7 +47,7 @@ flowchart TB
 | 디렉터리 | 역할 | 단계 |
 |---|---|---|
 | `src/decode/` | **[구현됨]** Zydis(16/32비트 legacy 모드) 래퍼 `Decoder`, `DecodedInstruction`(길이, 서명, x87, 제어 흐름) | 1 |
-| `src/interp/` | **[구현됨, 1차]** 인터프리터: `interp::Step`(한 명령), `access`(주소 생성·세그먼테이션·SMC 검사), `flags`(즉시 계산). 1차 명령 그룹은 #11 설계 결정 3. 블록 캐시는 측정 뒤 | 1 |
+| `src/interp/` | **[구현됨, 1·2차]** 인터프리터: `interp::Step`(한 명령), `access`(주소 생성·세그먼테이션·SMC 검사), `flags`(즉시 계산), `exec_arith`(시프트·곱셈/나눗셈·비트 연산), `exec_strings`(문자열+REP). 범위는 #11 결정 3과 #13 범위 표. 블록 캐시는 측정 뒤 | 1 |
 | `src/fpu/` | 80비트 x87 (SoftFloat 3 `extF80` 채택 후보) | 1 |
 | `src/translate/ir/` | x86 블록을 IR로. 플래그는 명시적 값, 죽은 플래그 제거 | 3 |
 | `src/translate/wasm/` | IR을 wasm 모듈 바이트열로. 인스턴스화는 호스트 JS | 3 |
