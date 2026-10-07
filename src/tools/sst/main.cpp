@@ -643,11 +643,9 @@ void ExecuteTest(ExecuteHarness* harness, const rex86::sst::MooFile& file,
                                       test.initial.regs.values[index]);
                     }
                 }
-                const rex86::decode::Decoder decoder16(
-                    rex86::decode::Decoder::Mode::kLegacy16);
-                rex86::decode::DecodedInstruction decoded;
-                if (decoder16.Decode(test.bytes.data(), test.bytes.size(),
-                                     initial.eip, &decoded))
+                // The test's own decode (at address 0) serves: operands
+                // and effective addresses do not depend on EIP.
+                if (decoded.instruction.length != 0)
                 {
                     char init_text[160];
                     std::snprintf(init_text, sizeof init_text,
