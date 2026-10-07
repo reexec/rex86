@@ -12,5 +12,6 @@
 
 | 문서 | 내용 |
 | --- | --- |
+| [target-board-cpus.md](target-board-cpus.md) | 대상 기판(안다미로 MK3, MK5, EZ2DJ 1, 2세대)의 CPU, CPU별 명령 집합과 클럭, 최소 지원 사양의 근거 / the target boards' CPUs (Andamiro MK3, MK5, EZ2DJ generations 1 and 2), their instruction sets and clocks, the basis of the minimum specification |
 | [x87.md](x87.md) | x87 FPU: 80비트 형식과 분류, 레지스터 스택과 태그, CW/SW, 예외와 우선순위, 환경 이미지 / the 80-bit format and its classes, the register stack and tags, CW/SW, exceptions and their priority, environment images |
 | [singlesteptests-moo.md](singlesteptests-moo.md) | SingleStepTests 하드웨어 생성 테스트와 MOO v1.1 바이너리 형식 / the hardware-generated SingleStepTests suites and the MOO v1.1 binary format |
