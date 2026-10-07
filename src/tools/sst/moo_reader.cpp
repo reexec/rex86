@@ -177,9 +177,25 @@ bool ParseState(Cursor* cursor, const std::size_t payload_size,
                 return Fail(error, "bad RAM chunk");
             }
         }
+        else if (id == "EA32")
+        {
+            const std::size_t next = cursor->offset + length;
+            if (!cursor->ReadU8(&state->ea.segment) ||
+                !cursor->ReadU16(&state->ea.selector) ||
+                !cursor->ReadU32(&state->ea.base) ||
+                !cursor->ReadU32(&state->ea.limit) ||
+                !cursor->ReadU32(&state->ea.offset) ||
+                !cursor->ReadU32(&state->ea.linear_address) ||
+                !cursor->ReadU32(&state->ea.physical_address))
+            {
+                return Fail(error, "bad EA32 chunk");
+            }
+            state->has_ea = true;
+            cursor->offset = next;
+        }
         else
         {
-            // QUEU, EA32, REGS, RMSK and anything newer: skip by length.
+            // QUEU, REGS, RMSK and anything newer: skip by length.
             if (!cursor->Skip(length))
             {
                 return Fail(error, "truncated state subchunk payload");

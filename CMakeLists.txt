@@ -59,6 +59,8 @@ add_library(rex86_core STATIC
     src/guest_memory.cpp
     src/cpu.cpp
     src/decode/decoder.cpp
+    src/interp/access.cpp
+    src/interp/interpreter.cpp
 )
 add_library(rex86::core ALIAS rex86_core)
 target_include_directories(rex86_core PUBLIC
@@ -81,6 +83,7 @@ if(REX86_BUILD_TESTS)
         tests/unit/decoder_test.cpp
         tests/unit/census_test.cpp
         tests/unit/moo_reader_test.cpp
+        tests/unit/interp_test.cpp
         src/tools/census/census.cpp
         src/tools/sst/moo_reader.cpp
     )

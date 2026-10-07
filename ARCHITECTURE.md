@@ -13,8 +13,8 @@ flowchart TB
         MEM["GuestMemory + PageAttributeTable [구현됨]"]
         ENV["Environment, CodeCacheServices, Event [구현됨]"]
         CPU["Cpu: 게이트, 인터럽트 라인, Run [구현됨, 엔진 없음]"]
-        DEC["decode/ Zydis 32비트 legacy [구현됨]"]
-        INT["interp/ [계획]"]
+        DEC["decode/ Zydis 16/32비트 legacy [구현됨]"]
+        INT["interp/ [구현됨, 1차 명령 그룹]"]
         IR["translate/ir/ [계획]"]
         WASM["translate/wasm/ [계획]"]
         A64["translate/aarch64/ [계획]"]
@@ -38,16 +38,16 @@ flowchart TB
 | `include/rex86/cpu.h` | `Cpu(memory, environment, features, code_cache = nullptr)`. 게이트 집합(`RegisterGate`, `IsGate`), pending 인터럽트 256비트(`RaiseInterrupt`, `NextPendingInterrupt`: 높은 벡터 먼저), `Run(budget)`, `Step`, `RequestStop`, `InvalidateCode`, `ActiveEngine` |
 | `include/rex86/version.h` | `VersionString()`: `VERSION` 파일 값 |
 
-지금 `Run`은 엔진이 없으므로 `kNoEngine`을 돌려주고 명령을 retire하지 않는다. 성공을 흉내내는 더미를 두지 않는다는 규칙에 따른 것이다. `ActiveEngine`은 `kNone`이다.
+#11부터 `Run`은 인터프리터로 실행한다(`ActiveEngine`은 `kInterpreter`). `Run`의 루프(src/cpu.cpp)는 정지 요청, 게이트(해당 명령 실행 전), IF가 켜진 명령 경계의 인터럽트 전달, 예산만 소유하고, x86 의미는 전부 `src/interp/`에 있다. 1차 증분의 명령 범위는 [#11 설계](docs/design/20261007-i011-interpreter-core.md) 결정 3의 표를 따르며, 범위 밖 명령은 `kIllegalInstruction` 폴트로 보고된다(조용한 더미 금지). `rex86_probe`의 둘째 줄은 이제 `engine=interpreter run=fault`다(초기 상태의 페이지는 비매핑이라 fetch가 폴트).
 
-*`Run` returns `kNoEngine` and retires nothing, since no engine exists yet; `ActiveEngine` is `kNone`. A dummy that imitated success is ruled out.*
+*From #11 on, `Run` executes on the interpreter (`ActiveEngine` is `kInterpreter`). The loop in src/cpu.cpp owns only stop requests, gates (before the gated instruction runs), interrupt delivery at IF-enabled boundaries and the budget; every x86 semantic lives under `src/interp/`. The first increment's instruction scope is decision 3 of the [#11 design](docs/design/20261007-i011-interpreter-core.md); anything outside it reports a `kIllegalInstruction` fault (no quiet dummies). `rex86_probe`'s second line now reads `engine=interpreter run=fault`, since the reset state's pages are unmapped and the fetch faults.*
 
 ## 3. 계획된 엔진 구조 / Planned engine structure **[계획 / planned]**
 
 | 디렉터리 | 역할 | 단계 |
 |---|---|---|
-| `src/decode/` | **[구현됨]** Zydis(32비트 legacy 모드) 래퍼 `Decoder`, `DecodedInstruction`(길이, 서명, x87, 제어 흐름). 블록 캐시는 인터프리터 작업에서 | 1 |
-| `src/interp/` | 인터프리터. IR을 거치지 않는 정확성 기준. 플래그 즉시 계산 | 1 |
+| `src/decode/` | **[구현됨]** Zydis(16/32비트 legacy 모드) 래퍼 `Decoder`, `DecodedInstruction`(길이, 서명, x87, 제어 흐름) | 1 |
+| `src/interp/` | **[구현됨, 1차]** 인터프리터: `interp::Step`(한 명령), `access`(주소 생성·세그먼테이션·SMC 검사), `flags`(즉시 계산). 1차 명령 그룹은 #11 설계 결정 3. 블록 캐시는 측정 뒤 | 1 |
 | `src/fpu/` | 80비트 x87 (SoftFloat 3 `extF80` 채택 후보) | 1 |
 | `src/translate/ir/` | x86 블록을 IR로. 플래그는 명시적 값, 죽은 플래그 제거 | 3 |
 | `src/translate/wasm/` | IR을 wasm 모듈 바이트열로. 인스턴스화는 호스트 JS | 3 |

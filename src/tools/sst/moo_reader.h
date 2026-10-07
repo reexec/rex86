@@ -50,12 +50,28 @@ struct RamEntry
     std::uint8_t value = 0;
 };
 
+// EA32: the effective address the hardware computed for a ModR/M operand,
+// with the linear and physical addresses it produced. p_addr differs from
+// l_addr when the rig's 24-bit physical bus wrapped the access.
+struct EffectiveAddressRecord
+{
+    std::uint8_t segment = 0;
+    std::uint16_t selector = 0;
+    std::uint32_t base = 0;
+    std::uint32_t limit = 0;
+    std::uint32_t offset = 0;
+    std::uint32_t linear_address = 0;
+    std::uint32_t physical_address = 0;
+};
+
 struct CpuStateChunk
 {
     RegisterSet32 regs;
     RegisterSet32 masks;  // RM32: undefined-state masks, FINA only
     bool has_masks = false;
     std::vector<RamEntry> ram;
+    bool has_ea = false;
+    EffectiveAddressRecord ea;
 };
 
 struct ExceptionRecord

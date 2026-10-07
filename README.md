@@ -120,7 +120,7 @@ trace 기록·재생, 단일 스텝, 상태 덤프를 코어가 제공합니다.
 | 단계 / Phase | 산출물 / Deliverable | 관련 목표 / Goals | 상태 / Status |
 |---|---|---|---|
 | 0 | 저장소, 공개 계약, 검증 하네스, 다섯 호스트 CI / repository, public contract, harness, five-host CI | 2, 4 | ✅ 완료 / done ([#1](https://github.com/reexec/rex86/issues/1), v0.0.2) |
-| 1 | 디코더, 인터프리터, 80비트 x87, census 이식, 대조 fuzz, trace / decoder, interpreter, 80-bit x87, census port, comparison fuzz, trace | 1, 2, 4, 9 | 🔶 진행 중 / in progress — 디코더·census 도구([#5](https://github.com/reexec/rex86/issues/5)), SingleStepTests 독립 검증 러너([#7](https://github.com/reexec/rex86/issues/7)) / decoder, census tool, SingleStepTests independent-validation runner |
+| 1 | 디코더, 인터프리터, 80비트 x87, census 이식, 대조 fuzz, trace / decoder, interpreter, 80-bit x87, census port, comparison fuzz, trace | 1, 2, 4, 9 | 🔶 진행 중 / in progress — 디코더·census 도구([#5](https://github.com/reexec/rex86/issues/5)), SingleStepTests 러너([#7](https://github.com/reexec/rex86/issues/7)), 인터프리터 1차: 실행 코어와 정수 핵심 그룹, SST 실행 비교([#11](https://github.com/reexec/rex86/issues/11)) / decoder, census tool, SingleStepTests runner, interpreter increment 1 (execution core, core integer groups, SST execute-and-compare) |
 | 2A·2B | 소비자 통합(각 소비자 저장소) / consumer integration (in each consumer repo) | 2 | ⬜ 미착수 / not started |
 | 3 | IR 프런트엔드, wasm JIT 백엔드, SMC 검사 / IR frontend, wasm JIT backend, SMC checks | 2, 3, 8 | ⬜ 미착수 / not started |
 | — | 벤치마크 하네스와 비교군 측정 / benchmark harness and comparator measurement | 3, 4, 7, 8 | ⬜ 미착수 / not started |
