@@ -252,6 +252,7 @@ If the requirement is a simple question or confirmation request, answer it direc
 * 요구사항을 접수하면 설계를 쓰기 전에 `gh issue create`(또는 GitHub 웹)로 이슈를 만든다. 제목은 작업을 한 줄로 적고, 본문에는 요구사항 요약과 (작성된 뒤) 설계 문서, 작업 지시서, 작업 로그의 링크를 둔다.
 * 설계 문서, 작업 지시서, 작업 로그의 첫머리에 `이슈: [#N](https://github.com/reexec/rex86/issues/N)`을 적고, 세 문서가 서로 링크한다.
 * 기존 task의 후속 작업(남은 검증, 후속 수정)은 새 issue를 만들지 않고 그 task의 issue에 코멘트로 붙이며, 작업 로그에는 날짜별 절을 더한다.
+* 커밋 메시지는 제목과 본문 모두 영어로만 작성한다.
 * 커밋 제목 끝에 관련 issue 번호를 `(#1)`처럼 붙인다. 이슈를 닫는 커밋이나 PR 본문에는 `Closes #1`을 적는다.
 * 의미 있는 작업마다 하나의 작업 지시 문서를 만들고, 작업이 끝나면 대응되는 작업 로그를 남긴다.
 * 설계 없이 바로 코드만 추가하지 않는다.
@@ -264,6 +265,7 @@ If the requirement is a simple question or confirmation request, answer it direc
 * When a requirement is received, create its issue with `gh issue create` (or the GitHub web UI) before writing the design. The title states the task in one line; the body holds a summary of the requirement and, once written, links to the design, the work order and the work log.
 * The design, the work order and the work log open with `이슈: [#N](https://github.com/reexec/rex86/issues/N)` and link to one another.
 * Follow-up work on an existing task (verification left open, a follow-up fix) goes to that task's issue as a comment rather than a new issue, and the work log gains a dated section.
+* Write commit messages, both title and body, in English only.
 * End commit titles with the related issue number, as in `(#1)`. A commit or PR body that closes the issue says `Closes #1`.
 * Create one work-order document for each meaningful task, and leave the corresponding work log when the task is complete.
 * Do not add code directly without a design.
