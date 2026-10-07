@@ -1,0 +1,109 @@
+name: ci
+
+# Every branch push checks every host. A PR from a branch of this repository
+# already has that push run on its head commit, so its jobs skip the
+# pull_request run; PRs from forks run there. A newer push cancels the
+# branch's earlier run, except on main, where each commit keeps its result.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  windows-x86:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build/ci -A Win32 -DREX86_WARNINGS_AS_ERRORS=ON
+      - name: Build
+        run: cmake --build build/ci --config Debug
+      - name: Test
+        run: ctest --test-dir build/ci -C Debug --output-on-failure
+
+  linux-x64:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Configure
+        env:
+          CC: ${{ matrix.compiler == 'gcc' && 'gcc' || 'clang' }}
+          CXX: ${{ matrix.compiler == 'gcc' && 'g++' || 'clang++' }}
+        run: cmake --preset linux-x64-debug -DREX86_WARNINGS_AS_ERRORS=ON
+      - name: Build
+        run: cmake --build --preset linux-x64-debug
+      - name: Test
+        run: ctest --preset linux-x64-debug
+
+  # A 32-bit x86 host, in the i386 Debian container re2DJ's release uses.
+  # JavaScript actions cannot run inside a 32-bit container, so only the
+  # build and test go into it.
+  linux-x86:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test in an i386 container
+        run: >-
+          docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src i386/debian:bookworm
+          setarch i686 bash -c '
+          set -euo pipefail;
+          apt-get update;
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends
+          ca-certificates git cmake ninja-build g++ make;
+          git config --global --add safe.directory "*";
+          cmake --preset linux-x86-debug -DREX86_WARNINGS_AS_ERRORS=ON;
+          cmake --build --preset linux-x86-debug;
+          ctest --preset linux-x86-debug'
+
+  # An AArch64 host. The core must give the same answers here as on x86;
+  # the probe's lines are the first such comparison.
+  linux-arm64:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Configure
+        run: cmake --preset linux-arm64-debug -DREX86_WARNINGS_AS_ERRORS=ON
+      - name: Build
+        run: cmake --build --preset linux-arm64-debug
+      - name: Test
+        run: ctest --preset linux-arm64-debug
+      - name: Probe
+        run: ./build/linux-arm64-debug/bin/rex86_probe
+
+  # wasm32 through Emscripten, run under Node. The core is portable to a
+  # host that cannot execute x86 at all, which is the whole point of it.
+  wasm32:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.74
+          actions-cache-folder: emsdk-cache
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Configure
+        run: emcmake cmake -S . -B build/web-wasm-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DREX86_WARNINGS_AS_ERRORS=ON
+      - name: Build
+        run: cmake --build build/web-wasm-release
+      - name: Test
+        run: ctest --test-dir build/web-wasm-release --output-on-failure
+      - name: Probe
+        run: node build/web-wasm-release/bin/rex86_probe.js

@@ -1,0 +1,73 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 20, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "linux-x64-debug",
+      "displayName": "Linux x86-64 Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/linux-x64-debug",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "REX86_BUILD_TESTS": "ON" },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" }
+    },
+    {
+      "name": "linux-x64-release",
+      "displayName": "Linux x86-64 Release",
+      "inherits": "linux-x64-debug",
+      "binaryDir": "${sourceDir}/build/linux-x64-release",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "linux-x86-debug",
+      "displayName": "Linux x86 (i386) Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/linux-x86-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_FLAGS": "-m32",
+        "CMAKE_EXE_LINKER_FLAGS": "-m32",
+        "REX86_BUILD_TESTS": "ON"
+      },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" }
+    },
+    {
+      "name": "linux-arm64-debug",
+      "displayName": "Linux AArch64 Debug (the same configuration as x64, named for the host)",
+      "inherits": "linux-x64-debug",
+      "binaryDir": "${sourceDir}/build/linux-arm64-debug"
+    },
+    {
+      "name": "windows-x86-debug",
+      "displayName": "Windows x86 Debug",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "Win32",
+      "binaryDir": "${sourceDir}/build/windows-x86",
+      "cacheVariables": { "REX86_BUILD_TESTS": "ON" },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+    },
+    {
+      "name": "web-wasm-release",
+      "displayName": "wasm32 Release (Emscripten; set EMSDK)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/web-wasm-release",
+      "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "REX86_BUILD_TESTS": "ON" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "linux-x64-debug", "configurePreset": "linux-x64-debug" },
+    { "name": "linux-x64-release", "configurePreset": "linux-x64-release" },
+    { "name": "linux-x86-debug", "configurePreset": "linux-x86-debug" },
+    { "name": "linux-arm64-debug", "configurePreset": "linux-arm64-debug" },
+    { "name": "windows-x86-debug", "configurePreset": "windows-x86-debug", "configuration": "Debug" },
+    { "name": "web-wasm-release", "configurePreset": "web-wasm-release" }
+  ],
+  "testPresets": [
+    { "name": "linux-x64-debug", "configurePreset": "linux-x64-debug", "output": { "outputOnFailure": true } },
+    { "name": "linux-x64-release", "configurePreset": "linux-x64-release", "output": { "outputOnFailure": true } },
+    { "name": "linux-x86-debug", "configurePreset": "linux-x86-debug", "output": { "outputOnFailure": true } },
+    { "name": "linux-arm64-debug", "configurePreset": "linux-arm64-debug", "output": { "outputOnFailure": true } },
+    { "name": "windows-x86-debug", "configurePreset": "windows-x86-debug", "configuration": "Debug", "output": { "outputOnFailure": true } },
+    { "name": "web-wasm-release", "configurePreset": "web-wasm-release", "output": { "outputOnFailure": true } }
+  ]
+}
