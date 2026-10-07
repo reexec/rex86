@@ -114,6 +114,8 @@ private:
     std::unordered_set<std::uint32_t> gates_;
     std::bitset<256> pending_interrupts_;
     bool stop_requested_ = false;
+    // Set for one boundary after MOV SS, POP SS or an IF-enabling STI.
+    bool interrupt_shadow_ = false;
 };
 
 }  // namespace rex86

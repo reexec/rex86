@@ -38,7 +38,7 @@ flowchart TB
 | `include/rex86/cpu.h` | `Cpu(memory, environment, features, code_cache = nullptr)`. 게이트 집합(`RegisterGate`, `IsGate`), pending 인터럽트 256비트(`RaiseInterrupt`, `NextPendingInterrupt`: 높은 벡터 먼저), `Run(budget)`, `Step`, `RequestStop`, `InvalidateCode`, `ActiveEngine` |
 | `include/rex86/version.h` | `VersionString()`: `VERSION` 파일 값 |
 
-#11부터 `Run`은 인터프리터로 실행한다(`ActiveEngine`은 `kInterpreter`). `Run`의 루프(src/cpu.cpp)는 정지 요청, 게이트(해당 명령 실행 전), IF가 켜진 명령 경계의 인터럽트 전달, 예산만 소유하고, x86 의미는 전부 `src/interp/`에 있다. 1차 증분의 명령 범위는 [#11 설계](docs/design/20261007-i011-interpreter-core.md) 결정 3의 표를 따르며, 범위 밖 명령은 `kIllegalInstruction` 폴트로 보고된다(조용한 더미 금지). `rex86_probe`의 둘째 줄은 이제 `engine=interpreter run=fault`다(초기 상태의 페이지는 비매핑이라 fetch가 폴트).
+#11부터 `Run`은 인터프리터로 실행한다(`ActiveEngine`은 `kInterpreter`). `Run`의 루프(src/cpu.cpp)는 정지 요청, 게이트(해당 명령 실행 전), IF가 켜진 명령 경계의 인터럽트 전달(MOV SS·POP SS·IF를 켠 STI 직후 한 경계는 지연, #15), 예산만 소유하고, x86 의미는 전부 `src/interp/`에 있다. 세그먼트 적재는 선택자 값과 무관하게 항상 `Environment::LoadDescriptor`를 거친다(#15 결정 1). 1차 증분의 명령 범위는 [#11 설계](docs/design/20261007-i011-interpreter-core.md) 결정 3의 표를 따르며, 범위 밖 명령은 `kIllegalInstruction` 폴트로 보고된다(조용한 더미 금지). `rex86_probe`의 둘째 줄은 이제 `engine=interpreter run=fault`다(초기 상태의 페이지는 비매핑이라 fetch가 폴트).
 
 *From #11 on, `Run` executes on the interpreter (`ActiveEngine` is `kInterpreter`). The loop in src/cpu.cpp owns only stop requests, gates (before the gated instruction runs), interrupt delivery at IF-enabled boundaries and the budget; every x86 semantic lives under `src/interp/`. The first increment's instruction scope is decision 3 of the [#11 design](docs/design/20261007-i011-interpreter-core.md); anything outside it reports a `kIllegalInstruction` fault (no quiet dummies). `rex86_probe`'s second line now reads `engine=interpreter run=fault`, since the reset state's pages are unmapped and the fetch faults.*
 
@@ -47,7 +47,7 @@ flowchart TB
 | 디렉터리 | 역할 | 단계 |
 |---|---|---|
 | `src/decode/` | **[구현됨]** Zydis(16/32비트 legacy 모드) 래퍼 `Decoder`, `DecodedInstruction`(길이, 서명, x87, 제어 흐름) | 1 |
-| `src/interp/` | **[구현됨, 1·2차]** 인터프리터: `interp::Step`(한 명령), `access`(주소 생성·세그먼테이션·SMC 검사), `flags`(즉시 계산), `exec_arith`(시프트·곱셈/나눗셈·비트 연산), `exec_strings`(문자열+REP). 범위는 #11 결정 3과 #13 범위 표. 블록 캐시는 측정 뒤 | 1 |
+| `src/interp/` | **[구현됨, 정수 명령 완결]** 인터프리터: `interp::Step`(한 명령), `access`(주소 생성·세그먼테이션·`LoadSegment`·SMC 검사), `flags`(즉시 계산), `exec_arith`(시프트·곱셈/나눗셈·비트 연산), `exec_strings`(문자열·문자열 포트 I/O+REP), `exec_segments`(세그먼트 적재, 같은 권한의 far 제어 흐름, IRET, 특권 명령 거절), `exec_bcd`(BCD, BOUND, SALC). 남은 것은 x87. 블록 캐시는 측정 뒤 | 1 |
 | `src/fpu/` | 80비트 x87 (SoftFloat 3 `extF80` 채택 후보) | 1 |
 | `src/translate/ir/` | x86 블록을 IR로. 플래그는 명시적 값, 죽은 플래그 제거 | 3 |
 | `src/translate/wasm/` | IR을 wasm 모듈 바이트열로. 인스턴스화는 호스트 JS | 3 |

@@ -96,7 +96,8 @@ Event Cpu::Run(std::uint64_t instruction_budget)
             return event;
         }
 
-        if ((state_.eflags & kEflagsInterrupt) != 0 && HasPendingInterrupt())
+        if (!interrupt_shadow_ && (state_.eflags & kEflagsInterrupt) != 0 &&
+            HasPendingInterrupt())
         {
             std::uint8_t vector = 0;
             NextPendingInterrupt(&vector);
@@ -131,6 +132,7 @@ Event Cpu::Run(std::uint64_t instruction_budget)
 
         const interp::StepResult step =
             interp::Step(state_, *memory_, *environment_, features_);
+        interrupt_shadow_ = step.inhibit_interrupts;
         switch (step.status)
         {
             case interp::StepStatus::kRetired:

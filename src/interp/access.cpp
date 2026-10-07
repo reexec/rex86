@@ -366,6 +366,33 @@ bool WriteOperand(Ctx* ctx, const ZydisDecodedOperand& operand,
     }
 }
 
+bool LoadSegment(Ctx* ctx, const Segment segment, const std::uint16_t selector)
+{
+    if (ctx->faulted)
+    {
+        return false;
+    }
+    Descriptor descriptor;
+    if (!ctx->environment.LoadDescriptor(selector, &descriptor) ||
+        (segment == Segment::kCs &&
+         !(descriptor.present && descriptor.executable)) ||
+        (segment == Segment::kSs &&
+         !(descriptor.present && descriptor.writable)))
+    {
+        ctx->Fault(FaultKind::kGeneralProtection, selector, false);
+        return false;
+    }
+    SegmentRegister& seg = ctx->state.Seg(segment);
+    seg.selector = selector;
+    seg.base = descriptor.base;
+    seg.limit = descriptor.limit;
+    seg.present = descriptor.present;
+    seg.executable = descriptor.executable;
+    seg.writable = descriptor.writable;
+    seg.default_32bit = descriptor.default_32bit;
+    return true;
+}
+
 bool Push(Ctx* ctx, const unsigned width_bits, const std::uint32_t value)
 {
     const SegmentRegister& ss = ctx->state.Seg(Segment::kSs);

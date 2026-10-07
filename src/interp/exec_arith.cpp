@@ -783,14 +783,25 @@ ExecStatus ExecuteArith2(Ctx* ctx, Event* stop_event)
     }
 }
 
-ExecStatus ExecuteExtended(Ctx* ctx, Event* stop_event)
+ExecStatus ExecuteExtended(Ctx* ctx, std::uint32_t* next_eip,
+                           Event* stop_event)
 {
-    const ExecStatus arith = ExecuteArith2(ctx, stop_event);
-    if (arith != ExecStatus::kUnimplemented)
+    ExecStatus status = ExecuteArith2(ctx, stop_event);
+    if (status != ExecStatus::kUnimplemented)
     {
-        return arith;
+        return status;
     }
-    return ExecuteStrings(ctx);
+    status = ExecuteStrings(ctx, stop_event);
+    if (status != ExecStatus::kUnimplemented)
+    {
+        return status;
+    }
+    status = ExecuteSegments(ctx, next_eip);
+    if (status != ExecStatus::kUnimplemented)
+    {
+        return status;
+    }
+    return ExecuteBcd(ctx);
 }
 
 }  // namespace rex86::interp

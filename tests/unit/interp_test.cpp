@@ -12,9 +12,17 @@ namespace
 class TestEnvironment final : public rex86::Environment
 {
 public:
-    bool LoadDescriptor(std::uint16_t, rex86::Descriptor* descriptor) override
+    bool LoadDescriptor(std::uint16_t selector,
+                        rex86::Descriptor* descriptor) override
     {
+        ++descriptor_loads;
+        if (selector == refused_selector)
+        {
+            return false;
+        }
         *descriptor = rex86::Descriptor{};
+        descriptor->base = descriptor_base;
+        descriptor->executable = executable;
         return true;
     }
 
@@ -30,7 +38,15 @@ public:
 
     bool PortWrite(std::uint16_t, std::uint8_t, std::uint32_t) override
     {
-        return serve_ports;
+        if (!serve_ports || port_write_budget == 0)
+        {
+            return false;
+        }
+        if (port_write_budget > 0)
+        {
+            --port_write_budget;
+        }
+        return true;
     }
 
     bool InterruptTarget(std::uint8_t, std::uint16_t*, std::uint32_t*) override
@@ -59,6 +75,12 @@ public:
 
     bool serve_ports = false;
     std::uint32_t port_read_value = 0;
+    // Negative: unlimited accepted port writes.
+    int port_write_budget = -1;
+    int refused_selector = -1;
+    std::uint32_t descriptor_base = 0;
+    bool executable = true;
+    int descriptor_loads = 0;
     std::uint32_t last_code_page_written = 0;
     int code_page_writes = 0;
 };
@@ -257,9 +279,9 @@ void RunInterpTests(rex86::test::Context& context)
     }
     {
         // An instruction outside the implemented increments reports
-        // kIllegalInstruction rather than quietly doing nothing: here AAA
-        // (BCD, a later increment).
-        Machine m({0x37,  // aaa
+        // kIllegalInstruction rather than quietly doing nothing: here
+        // FLD1 (x87, a later increment).
+        Machine m({0xD9, 0xE8,  // fld1
                    0xF4});
         const rex86::Event event = m.cpu.Run(100);
         REX86_CHECK(context, event.reason == StopReason::kFault);
@@ -398,6 +420,144 @@ void RunInterpTests(rex86::test::Context& context)
         m.cpu.Run(100);
         REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEbx) & 0xFFu, 0u);
         REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEcx) & 0xFFu, 1u);
+    }
+    // --- increment 3 (#15) ---
+    {
+        // MOV DS, AX asks the host; a refused selector faults GP and
+        // leaves DS unchanged.
+        Machine m({0x66, 0xB8, 0x23, 0x00,  // mov ax, 0x23
+                   0x8E, 0xD8,              // mov ds, ax
+                   0xF4});
+        m.environment.refused_selector = 0x23;
+        const rex86::Event event = m.cpu.Run(100);
+        REX86_CHECK(context, event.reason == StopReason::kFault);
+        REX86_CHECK(context,
+                    event.fault_kind == rex86::FaultKind::kGeneralProtection);
+        REX86_CHECK_EQ(context,
+                       m.cpu.state().Seg(rex86::Segment::kDs).selector,
+                       std::uint16_t{0});
+        REX86_CHECK_EQ(context, m.cpu.state().eip, Machine::kCodeBase + 4);
+
+        Machine ok({0x66, 0xB8, 0x2B, 0x00,  // mov ax, 0x2B
+                    0x8E, 0xC0,              // mov es, ax
+                    0xF4});
+        ok.environment.descriptor_base = 0x100;
+        REX86_CHECK(context, ok.cpu.Run(100).reason == StopReason::kHalted);
+        REX86_CHECK_EQ(context,
+                       ok.cpu.state().Seg(rex86::Segment::kEs).selector,
+                       std::uint16_t{0x2B});
+        REX86_CHECK_EQ(context, ok.cpu.state().Seg(rex86::Segment::kEs).base,
+                       0x100u);
+    }
+    {
+        // A CS load needs an executable descriptor.
+        Machine m({0xEA, 0x00, 0x20, 0x00, 0x00, 0x33, 0x00});  // jmp 33:2000
+        m.environment.executable = false;
+        const rex86::Event event = m.cpu.Run(100);
+        REX86_CHECK(context,
+                    event.fault_kind == rex86::FaultKind::kGeneralProtection);
+        REX86_CHECK_EQ(context, m.cpu.state().eip, Machine::kCodeBase);
+    }
+    {
+        // far CALL then RETF round-trips CS:EIP and the stack.
+        Machine m({0x9A, 0x00, 0x20, 0x00, 0x00, 0x0F, 0x00,  // call 0F:2000
+                   0xF4});
+        m.buffer[0x2000] = 0xCB;  // retf
+        const rex86::Event event = m.cpu.Run(100);
+        REX86_CHECK(context, event.reason == StopReason::kHalted);
+        REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEsp),
+                       Machine::kStackTop);
+        REX86_CHECK_EQ(context, m.cpu.state().eip, Machine::kCodeBase + 8);
+        REX86_CHECK_EQ(context, m.environment.descriptor_loads, 2);
+    }
+    {
+        // IRET pops EIP, CS and EFLAGS.
+        Machine m({0x68, 0x01, 0x08, 0x00, 0x00,  // push 0x801 (OF|CF)
+                   0x6A, 0x0F,                    // push 0x0F (cs)
+                   0x68, 0x00, 0x30, 0x00, 0x00,  // push 0x3000
+                   0xCF});                        // iretd
+        m.buffer[0x3000] = 0xF4;
+        REX86_CHECK(context, m.cpu.Run(100).reason == StopReason::kHalted);
+        REX86_CHECK(context, (m.cpu.state().eflags & rex86::kEflagsCarry) != 0);
+        REX86_CHECK(context,
+                    (m.cpu.state().eflags & rex86::kEflagsOverflow) != 0);
+        REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEsp),
+                       Machine::kStackTop);
+    }
+    {
+        // MOV SS shadows the next boundary: the pending interrupt waits
+        // until after the instruction following MOV SS.
+        Machine m({0xFB,        // sti (itself a shadow)
+                   0x90,        // nop
+                   0x8E, 0xD0,  // mov ss, ax
+                   0x90,        // nop  <- runs before delivery
+                   0xF4});
+        m.cpu.RaiseInterrupt(0x20);
+        // The host declines the target, so delivery shows up as a
+        // kSoftwareInterrupt stop. The STI shadow keeps it off the
+        // boundary right after STI, so NOP runs first: two retired.
+        rex86::Event event = m.cpu.Run(100);
+        REX86_CHECK(context, event.reason == StopReason::kSoftwareInterrupt);
+        REX86_CHECK_EQ(context, event.instructions_retired, std::uint64_t{2});
+        // Clear it and check MOV SS's own shadow: the shadow persists
+        // across Run calls.
+        m.cpu.ClearPendingInterrupt(0x20);
+        REX86_CHECK(context,
+                    m.cpu.Run(1).reason == StopReason::kBudgetExhausted);
+        m.cpu.RaiseInterrupt(0x20);
+        event = m.cpu.Run(100);
+        REX86_CHECK(context, event.reason == StopReason::kSoftwareInterrupt);
+        REX86_CHECK_EQ(context, event.instructions_retired, std::uint64_t{1});
+    }
+    {
+        // A declined REP OUTSB stops restartably: completed iterations
+        // stay, EIP stays at the instruction.
+        Machine m({0xBE, 0x00, 0x20, 0x00, 0x00,  // mov esi, 0x2000
+                   0xB9, 0x03, 0x00, 0x00, 0x00,  // mov ecx, 3
+                   0x66, 0xBA, 0x42, 0x00,        // mov dx, 0x42
+                   0xF3, 0x6E,                    // rep outsb
+                   0xF4});
+        m.environment.serve_ports = true;
+        m.environment.port_write_budget = 1;
+        const rex86::Event event = m.cpu.Run(100);
+        REX86_CHECK(context, event.reason == StopReason::kPortIo);
+        REX86_CHECK(context, event.port_is_write);
+        REX86_CHECK_EQ(context, event.instructions_retired, std::uint64_t{3});
+        REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEcx), 2u);
+        REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEsi), 0x2001u);
+        REX86_CHECK_EQ(context, m.cpu.state().eip, Machine::kCodeBase + 14);
+    }
+    {
+        // BCD: DAA after 0x19 + 0x28 = 0x41 gives 0x47; AAM 10 splits.
+        Machine m({0xB0, 0x19,        // mov al, 0x19
+                   0x04, 0x28,        // add al, 0x28
+                   0x27,              // daa
+                   0x88, 0xC3,        // mov bl, al
+                   0xB0, 0x4F,        // mov al, 79
+                   0xD4, 0x0A,        // aam
+                   0xF4});
+        m.cpu.Run(100);
+        REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEbx) & 0xFFu, 0x47u);
+        REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEax) & 0xFFFFu,
+                       0x0709u);
+    }
+    {
+        // BOUND out of range faults kBound without retiring; SALC copies
+        // CF into AL.
+        Machine m({0xBB, 0x00, 0x20, 0x00, 0x00,  // mov ebx, 0x2000
+                   0xB8, 0x0B, 0x00, 0x00, 0x00,  // mov eax, 11
+                   0x62, 0x03,                    // bound eax, [ebx]
+                   0xF4});
+        const std::uint8_t bounds[8] = {0, 0, 0, 0, 10, 0, 0, 0};
+        m.memory.WriteBytes(0x2000, bounds, 8);
+        const rex86::Event event = m.cpu.Run(100);
+        REX86_CHECK(context, event.fault_kind == rex86::FaultKind::kBound);
+        REX86_CHECK_EQ(context, m.cpu.state().eip, Machine::kCodeBase + 10);
+
+        Machine salc({0xF9, 0xD6, 0xF4});  // stc; salc
+        salc.cpu.Run(100);
+        REX86_CHECK_EQ(context, salc.cpu.state().Get(Gpr::kEax) & 0xFFu,
+                       0xFFu);
     }
     {
         // ENTER 8,0 and LEAVE restore the frame exactly.
