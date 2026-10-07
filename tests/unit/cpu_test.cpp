@@ -64,26 +64,28 @@ void RunCpuTests(rex86::test::Context& context)
     rex86::Features features;
     Cpu cpu(&memory, &environment, features);
 
-    // A fresh Cpu holds reset state and no engine.
+    // A fresh Cpu holds reset state and runs on the interpreter.
     REX86_CHECK_EQ(context, cpu.state().eflags, rex86::kEflagsReserved1);
-    REX86_CHECK(context, cpu.ActiveEngine() == rex86::Engine::kNone);
+    REX86_CHECK(context, cpu.ActiveEngine() == rex86::Engine::kInterpreter);
     REX86_CHECK(context, cpu.memory() == &memory);
     REX86_CHECK(context, cpu.environment() == &environment);
     REX86_CHECK(context, cpu.code_cache() == nullptr);
     REX86_CHECK(context, cpu.features().x87);
     REX86_CHECK(context, !cpu.features().sse);
 
-    // Without an engine, Run reports exactly that, retiring nothing. It does
-    // not pretend the budget ran out.
+    // The pages start unmapped, so the first fetch faults: an explicit
+    // fault event, not an imitated success, and nothing retires.
     Event event = cpu.Run(1000);
-    REX86_CHECK(context, event.reason == StopReason::kNoEngine);
+    REX86_CHECK(context, event.reason == StopReason::kFault);
+    REX86_CHECK(context, event.fault_kind == rex86::FaultKind::kAccessViolation);
+    REX86_CHECK(context, event.fault_on_fetch);
     REX86_CHECK_EQ(context, event.instructions_retired, std::uint64_t{0});
-    REX86_CHECK(context, cpu.Step().reason == StopReason::kNoEngine);
+    REX86_CHECK(context, cpu.Step().reason == StopReason::kFault);
 
     // RequestStop is honoured by the next Run and then forgotten.
     cpu.RequestStop();
     REX86_CHECK(context, cpu.Run(1).reason == StopReason::kStopRequested);
-    REX86_CHECK(context, cpu.Run(1).reason == StopReason::kNoEngine);
+    REX86_CHECK(context, cpu.Run(1).reason == StopReason::kFault);
 
     // Gates are a set of linear addresses.
     cpu.RegisterGate(0x7FFE0000u);
@@ -125,6 +127,7 @@ void RunCpuTests(rex86::test::Context& context)
     REX86_CHECK_EQ(context, filled.gate_address, std::uint32_t{0x7FFE0010u});
     REX86_CHECK(context, filled.fault_kind == rex86::FaultKind::kNone);
 
-    // The environment was not consulted by a core without an engine.
+    // The environment was never consulted: every fetch above faulted
+    // before any host call was needed.
     REX86_CHECK_EQ(context, environment.descriptor_loads, 0);
 }

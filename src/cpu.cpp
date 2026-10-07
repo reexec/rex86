@@ -1,5 +1,7 @@
 #include "rex86/cpu.h"
 
+#include "interp/interpreter.h"
+
 namespace rex86
 {
 
@@ -14,10 +16,10 @@ Cpu::Cpu(GuestMemory* memory,
 
 Engine Cpu::ActiveEngine() const
 {
-    // Task #1 ships the contract without an engine. The interpreter (task
-    // of phase 1) answers kInterpreter here, and a translation backend
-    // answers kTranslator only when code_cache_ is non-null.
-    return Engine::kNone;
+    // The interpreter exists from task #11 on. A translation backend will
+    // answer kTranslator here only when code_cache_ is non-null and the
+    // backend is built.
+    return Engine::kInterpreter;
 }
 
 void Cpu::RegisterGate(std::uint32_t linear_address)
@@ -65,20 +67,88 @@ void Cpu::ClearPendingInterrupt(std::uint8_t vector)
 
 Event Cpu::Run(std::uint64_t instruction_budget)
 {
-    static_cast<void>(instruction_budget);
+    // The loop owns what is not an instruction's semantics: stop requests,
+    // gates (checked before the instruction at the gate runs), external
+    // interrupt delivery at boundaries with IF set, and the budget. The
+    // x86 semantics live in interp::Step alone.
     Event event;
-    if (stop_requested_)
+    std::uint64_t retired = 0;
+
+    while (true)
     {
-        stop_requested_ = false;
-        event.reason = StopReason::kStopRequested;
-        return event;
+        if (stop_requested_)
+        {
+            stop_requested_ = false;
+            event.reason = StopReason::kStopRequested;
+            event.instructions_retired = retired;
+            return event;
+        }
+
+        const SegmentRegister& cs = state_.Seg(Segment::kCs);
+        const std::uint32_t ip_mask =
+            cs.default_32bit ? 0xFFFFFFFFu : 0xFFFFu;
+        const std::uint32_t linear = cs.base + (state_.eip & ip_mask);
+        if (IsGate(linear))
+        {
+            event.reason = StopReason::kGate;
+            event.gate_address = linear;
+            event.instructions_retired = retired;
+            return event;
+        }
+
+        if ((state_.eflags & kEflagsInterrupt) != 0 && HasPendingInterrupt())
+        {
+            std::uint8_t vector = 0;
+            NextPendingInterrupt(&vector);
+            std::uint16_t target_cs = 0;
+            std::uint32_t target_eip = 0;
+            if (!environment_->InterruptTarget(vector, &target_cs,
+                                               &target_eip))
+            {
+                // The host keeps the vector pending and takes the event.
+                event.reason = StopReason::kSoftwareInterrupt;
+                event.vector = vector;
+                event.instructions_retired = retired;
+                return event;
+            }
+            Event fault_event;
+            if (!interp::EnterInterrupt(state_, *memory_, *environment_,
+                                        target_cs, target_eip, &fault_event))
+            {
+                fault_event.instructions_retired = retired;
+                return fault_event;
+            }
+            ClearPendingInterrupt(vector);
+            continue;
+        }
+
+        if (retired >= instruction_budget)
+        {
+            event.reason = StopReason::kBudgetExhausted;
+            event.instructions_retired = retired;
+            return event;
+        }
+
+        const interp::StepResult step =
+            interp::Step(state_, *memory_, *environment_, features_);
+        switch (step.status)
+        {
+            case interp::StepStatus::kRetired:
+                ++retired;
+                break;
+            case interp::StepStatus::kRetiredAndStopped:
+                ++retired;
+                event = step.event;
+                event.instructions_retired = retired;
+                return event;
+            case interp::StepStatus::kFaulted:
+            case interp::StepStatus::kUnimplemented:
+            default:
+                event = step.event;
+                event.instructions_retired = retired;
+                return event;
+        }
     }
-    // No engine exists yet. This is reported, not imitated: a caller that
-    // reads kNoEngine knows nothing ran, where a dummy "budget exhausted"
-    // would let an idle core pass for a working one.
-    event.reason = StopReason::kNoEngine;
-    event.instructions_retired = 0;
-    return event;
 }
 
 Event Cpu::Step()

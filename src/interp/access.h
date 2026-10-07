@@ -1,0 +1,75 @@
+// Operand and memory access for the interpreter: register file mapping,
+// effective-address generation (address-size wrap), segmentation (base,
+// limit, faults) and guest memory reads and writes with the kTranslated
+// store check. This is the one place goal 1's address semantics live on
+// the interpreter path.
+
+#ifndef REX86_INTERP_ACCESS_H_
+#define REX86_INTERP_ACCESS_H_
+
+#include <cstdint>
+
+#include "decode/decoder.h"
+#include "rex86/cpu_state.h"
+#include "rex86/environment.h"
+#include "rex86/guest_memory.h"
+
+namespace rex86::interp
+{
+
+// One instruction's execution context. `fault` is filled by the first
+// failing access; later helpers become no-ops once `faulted` is set, so
+// semantics code can run straight-line and check once.
+struct Ctx
+{
+    CpuState& state;
+    GuestMemory& memory;
+    Environment& environment;
+    const decode::DecodedInstruction& decoded;
+    Event fault;
+    bool faulted = false;
+
+    void Fault(FaultKind kind, std::uint32_t address, bool on_write);
+};
+
+// General-purpose register access by Zydis register id. Width comes from
+// the register itself (AL/AX/EAX...); 8- and 16-bit writes merge.
+std::uint32_t ReadGpr(const CpuState& state, ZydisRegister reg);
+void WriteGpr(CpuState& state, ZydisRegister reg, std::uint32_t value);
+
+// The segment a memory operand uses, overrides included. The raw prefix
+// bytes are consulted as well as Zydis's resolution: Zydis reads a 0x3E
+// before an indirect CALL/JMP as CET's notrack hint, but on IA-32 it is a
+// DS override and the guests this core serves predate CET.
+Segment SegmentOf(const decode::DecodedInstruction& decoded,
+                  const ZydisDecodedOperand& operand);
+
+// The effective address of a memory operand, wrapped at the instruction's
+// address width.
+std::uint32_t EffectiveAddress(const Ctx& ctx,
+                               const ZydisDecodedOperand& operand);
+
+// Data access through a segment: limit check (kGeneralProtection), then
+// guest memory (kAccessViolation), little-endian. width_bits is 8, 16 or
+// 32. A store to a kTranslated page clears the flag and reports
+// OnCodePageWritten before the store.
+bool ReadVirtual(Ctx* ctx, Segment segment, std::uint32_t offset,
+                 unsigned width_bits, std::uint32_t* value);
+bool WriteVirtual(Ctx* ctx, Segment segment, std::uint32_t offset,
+                  unsigned width_bits, std::uint32_t value);
+
+// Explicit-operand read/write: register, memory or immediate (immediates
+// never write). Values are zero-extended to 32 bits.
+bool ReadOperand(Ctx* ctx, const ZydisDecodedOperand& operand,
+                 std::uint32_t* value);
+bool WriteOperand(Ctx* ctx, const ZydisDecodedOperand& operand,
+                  std::uint32_t value);
+
+// Stack operations at the given width (16 or 32), using SS and the stack
+// pointer width SS.D selects.
+bool Push(Ctx* ctx, unsigned width_bits, std::uint32_t value);
+bool Pop(Ctx* ctx, unsigned width_bits, std::uint32_t* value);
+
+}  // namespace rex86::interp
+
+#endif  // REX86_INTERP_ACCESS_H_

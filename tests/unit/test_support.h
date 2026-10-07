@@ -62,5 +62,6 @@ void RunCpuTests(rex86::test::Context& context);
 void RunDecoderTests(rex86::test::Context& context);
 void RunCensusTests(rex86::test::Context& context);
 void RunMooReaderTests(rex86::test::Context& context);
+void RunInterpTests(rex86::test::Context& context);
 
 #endif  // REX86_TESTS_UNIT_TEST_SUPPORT_H_

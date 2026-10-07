@@ -14,4 +14,4 @@
 
 | 문서 | 내용 | 현재 상태 |
 | --- | --- | --- |
-| (아직 없음 / none yet) | | |
+| [singlesteptests-386ex-deviations.md](singlesteptests-386ex-deviations.md) | SingleStepTests 386EX 실측: 테스트 구조, SDM과 다른 하드웨어 동작(SIB scale-on-base, POPAD ESP), 인코딩 해석 주의 / facts measured from the 386EX suite: structure, SDM deviations, encoding notes | #11에서 확인, CALL 순서 1건 미해결 / confirmed in #11, one unresolved |
