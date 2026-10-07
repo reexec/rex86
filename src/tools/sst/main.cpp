@@ -1,8 +1,9 @@
 // rex86_sst: runs the SingleStepTests/80386 suite (MIT, hardware-generated
-// on a real 386EX) against the core. Stage 1 validates the decoder: every
-// test's instruction bytes must decode, with the decoded length equal to
-// the recorded byte count. Stage 2 (the interpreter task) will apply the
-// initial state, execute and compare the final state under the undefined
+// on a real 386EX) against the core. By default it validates the decoder:
+// every test's instruction bytes must decode, with the decoded length
+// equal to the recorded byte count. --execute applies the initial state,
+// executes, emulates the rig's real-mode IVT delivery for exceptions and
+// software interrupts, and compares the final state under the undefined
 // masks.
 //
 // The suite stays outside the repository; this tool takes a directory of
@@ -48,8 +49,9 @@ struct Totals
     std::uint64_t exec_passed = 0;
     std::uint64_t exec_mismatches = 0;
     std::uint64_t skipped_unimplemented = 0;
-    std::uint64_t skipped_exception = 0;
-    std::uint64_t skipped_boundary = 0;  // INT n / port I/O host delegation
+    std::uint64_t delivered = 0;  // passed tests that went through the IVT
+    std::uint64_t skipped_exception = 0;  // a fault during delivery
+    std::uint64_t skipped_boundary = 0;  // port input, system instructions
     std::uint64_t skipped_unrepresentable = 0;  // >16MiB: 24-bit bus wrap
     std::uint64_t skipped_hw_quirk = 0;  // 386EX deviates from the SDM
 };
@@ -70,11 +72,10 @@ public:
     bool LoadDescriptor(std::uint16_t selector,
                         rex86::Descriptor* descriptor) override
     {
-        // Real-mode base, but the 4 GiB limit the 386EX test rig shows:
-        // tests access 32-bit effective addresses beyond 0xFFFF without
-        // recording a fault, so the rig's descriptor caches are 'unreal'.
+        // Real mode: base = selector * 16 and the default 0xFFFF limit the
+        // rig's descriptor caches start from (design #17, decision 1).
         descriptor->base = static_cast<std::uint32_t>(selector) << 4;
-        descriptor->limit = 0xFFFFFFFFu;
+        descriptor->limit = 0xFFFFu;
         descriptor->present = true;
         descriptor->executable = true;
         descriptor->writable = true;
@@ -127,8 +128,8 @@ void ApplySegment(rex86::CpuState* state, const rex86::Segment segment,
     rex86::SegmentRegister& seg = state->Seg(segment);
     seg.selector = static_cast<std::uint16_t>(selector);
     seg.base = (selector & 0xFFFFu) << 4;
-    // See LoadDescriptor: the rig's caches carry a 4 GiB limit.
-    seg.limit = 0xFFFFFFFFu;
+    // See LoadDescriptor: the default real-mode limit.
+    seg.limit = 0xFFFFu;
     seg.present = true;
     seg.executable = true;
     seg.writable = true;
@@ -196,6 +197,55 @@ bool ReadBackRegister(const rex86::CpuState& state, const std::size_t index,
     }
 }
 
+// The vector the rig's CPU would deliver for a stop, or -1 when the stop
+// is not an exception or interrupt the harness delivers. Faults map by the
+// SDM's vector numbers; INT n, INT3 and INTO arrive as retired software
+// interrupts carrying their vector.
+int DeliverableVector(const rex86::interp::StepResult& step)
+{
+    if (step.status == rex86::interp::StepStatus::kRetiredAndStopped &&
+        step.event.reason == rex86::StopReason::kSoftwareInterrupt)
+    {
+        return step.event.vector;
+    }
+    if (step.status != rex86::interp::StepStatus::kFaulted)
+    {
+        return -1;
+    }
+    switch (step.event.fault_kind)
+    {
+        case rex86::FaultKind::kDivide: return 0;
+        case rex86::FaultKind::kSingleStep: return 1;
+        case rex86::FaultKind::kBreakpoint: return 3;
+        case rex86::FaultKind::kOverflow: return 4;
+        case rex86::FaultKind::kBound: return 5;
+        case rex86::FaultKind::kIllegalInstruction: return 6;
+        case rex86::FaultKind::kStackFault: return 12;
+        case rex86::FaultKind::kGeneralProtection: return 13;
+        default: return -1;
+    }
+}
+
+// Real-mode delivery as the rig's 386 performs it: the handler's IP:CS
+// pair comes from the IVT at linear vector * 4, and the core's own
+// EnterInterrupt pushes FLAGS/CS/IP and clears IF/TF. The core never
+// does this itself -- where an exception goes is the host's business.
+bool DeliverThroughIvt(ExecuteHarness* harness, rex86::CpuState* state,
+                       const int vector)
+{
+    const std::uint32_t entry = static_cast<std::uint32_t>(vector) * 4u;
+    std::uint16_t target_ip = 0;
+    std::uint16_t target_cs = 0;
+    if (!harness->memory().Read16(entry, &target_ip) ||
+        !harness->memory().Read16(entry + 2u, &target_cs))
+    {
+        return false;
+    }
+    rex86::Event fault;
+    return rex86::interp::EnterInterrupt(*state, harness->memory(), *harness,
+                                         target_cs, target_ip, &fault);
+}
+
 const char* RegisterName(const std::size_t index)
 {
     static const char* const kNames[] = {
@@ -205,6 +255,26 @@ const char* RegisterName(const std::size_t index)
     return index < 20 ? kNames[index] : "?";
 }
 
+// Whether a POPA/POPAD that faults on the stack limit does so after at
+// least one slot: the 386EX then keeps the registers already popped. A
+// fault on the first slot (DI) commits nothing and stays comparable.
+bool PopaCommitsBeforeFault(const rex86::decode::DecodedInstruction& decoded,
+                            const rex86::sst::MooTest& test)
+{
+    if (decoded.instruction.mnemonic != ZYDIS_MNEMONIC_POPA &&
+        decoded.instruction.mnemonic != ZYDIS_MNEMONIC_POPAD)
+    {
+        return false;
+    }
+    const std::uint32_t bytes = decoded.instruction.operand_width / 8u;
+    const std::uint32_t sp = test.initial.regs.Has(rex86::sst::kRegEsp)
+        ? test.initial.regs.values[rex86::sst::kRegEsp] & 0xFFFFu
+        : 0u;
+    // The suite's stacks are 16-bit: each slot's offset wraps at 64 KiB,
+    // and the first slot whose bytes run past 0xFFFF faults.
+    return sp + bytes - 1u <= 0xFFFFu;
+}
+
 // Runs one test on the harness and compares the final state. Returns
 // through the totals; prints the first mismatches when verbose.
 void ExecuteTest(ExecuteHarness* harness, const rex86::sst::MooFile& file,
@@ -212,33 +282,28 @@ void ExecuteTest(ExecuteHarness* harness, const rex86::sst::MooFile& file,
                  const std::string& file_name,
                  const std::uint32_t csv_defined_flags, Totals* totals)
 {
-    if (test.has_exception)
+    // The tested instruction, for the classifications below. A decode
+    // failure leaves `decoded` zeroed, which matches none of them.
+    const rex86::decode::Decoder decoder16(
+        rex86::decode::Decoder::Mode::kLegacy16);
+    rex86::decode::DecodedInstruction decoded;
+    if (!decoder16.Decode(test.bytes.data(), test.bytes.size(), 0, &decoded))
     {
-        // Exception semantics (real-mode IVT frames) are a later
-        // increment; see design #11.
-        ++totals->skipped_exception;
-        return;
+        decoded = rex86::decode::DecodedInstruction{};
     }
 
+    // 386EX quirk: a SIB with no index register (index field 100) but a
+    // nonzero scale applies the scale to the BASE (EA = base*scale +
+    // disp), where the SDM says the scale is ignored. Verified numerically
+    // on lea/ALU tests; the core follows the SDM, so these encodings are
+    // counted apart, not compared. See
+    // docs/analysis/singlesteptests-386ex-deviations.md.
+    if ((decoded.instruction.attributes & ZYDIS_ATTRIB_HAS_SIB) != 0 &&
+        decoded.instruction.raw.sib.index == 4 &&
+        decoded.instruction.raw.sib.scale != 0)
     {
-        // 386EX quirk: a SIB with no index register (index field 100) but
-        // a nonzero scale applies the scale to the BASE (EA = base*scale
-        // + disp), where the SDM says the scale is ignored. Verified
-        // numerically on lea/ALU tests; the core follows the SDM, so
-        // these encodings are counted apart, not compared. See
-        // docs/analysis/singlesteptests-386ex-deviations.md.
-        const rex86::decode::Decoder decoder16(
-            rex86::decode::Decoder::Mode::kLegacy16);
-        rex86::decode::DecodedInstruction decoded;
-        if (decoder16.Decode(test.bytes.data(), test.bytes.size(), 0,
-                             &decoded) &&
-            (decoded.instruction.attributes & ZYDIS_ATTRIB_HAS_SIB) != 0 &&
-            decoded.instruction.raw.sib.index == 4 &&
-            decoded.instruction.raw.sib.scale != 0)
-        {
-            ++totals->skipped_hw_quirk;
-            return;
-        }
+        ++totals->skipped_hw_quirk;
+        return;
     }
 
     rex86::CpuState state;
@@ -261,30 +326,28 @@ void ExecuteTest(ExecuteHarness* harness, const rex86::sst::MooFile& file,
     // the HALT. So: step until a HLT retires, which normally takes two
     // steps. The cap only guards a runaway.
     const rex86::Features features;
+    // A 32-bit-address REP with a large count outruns the rig's cycle
+    // budget: the hardware was interrupted mid-string and the final state
+    // is a partial iteration this harness cannot predict.
+    if ((decoded.instruction.attributes &
+         (ZYDIS_ATTRIB_HAS_REP | ZYDIS_ATTRIB_HAS_REPE |
+          ZYDIS_ATTRIB_HAS_REPNE)) != 0 &&
+        decoded.instruction.address_width == 32 &&
+        test.initial.regs.Has(rex86::sst::kRegEcx) &&
+        test.initial.regs.values[rex86::sst::kRegEcx] > 0xFFFFu)
     {
-        // A 32-bit-address REP with a large count outruns the rig's cycle
-        // budget: the hardware was interrupted mid-string and the final
-        // state is a partial iteration this harness cannot predict.
-        const rex86::decode::Decoder decoder16(
-            rex86::decode::Decoder::Mode::kLegacy16);
-        rex86::decode::DecodedInstruction decoded;
-        if (decoder16.Decode(test.bytes.data(), test.bytes.size(), 0,
-                             &decoded) &&
-            (decoded.instruction.attributes &
-             (ZYDIS_ATTRIB_HAS_REP | ZYDIS_ATTRIB_HAS_REPE |
-              ZYDIS_ATTRIB_HAS_REPNE)) != 0 &&
-            decoded.instruction.address_width == 32 &&
-            test.initial.regs.Has(rex86::sst::kRegEcx) &&
-            test.initial.regs.values[rex86::sst::kRegEcx] > 0xFFFFu)
-        {
-            ++totals->skipped_unrepresentable;
-            return;
-        }
+        ++totals->skipped_unrepresentable;
+        return;
     }
 
+    // An exception or software interrupt is delivered through the IVT
+    // once, and execution continues to the HLT the generator seeds at the
+    // handler (design #17, decision 3).
     rex86::interp::StepResult step;
     int instructions = 0;
     std::uint32_t eip_after_first = 0;
+    int delivered_vector = -1;
+    bool delivery_faulted = false;
     for (;;)
     {
         step = rex86::interp::Step(state, harness->memory(), *harness,
@@ -294,9 +357,23 @@ void ExecuteTest(ExecuteHarness* harness, const rex86::sst::MooFile& file,
         {
             eip_after_first = state.eip;
         }
-        if (step.status != rex86::interp::StepStatus::kRetired ||
-            instructions > 32)
+        if (instructions > 32)
         {
+            break;
+        }
+        if (step.status == rex86::interp::StepStatus::kRetired)
+        {
+            continue;
+        }
+        const int vector = DeliverableVector(step);
+        if (vector < 0 || delivered_vector >= 0)
+        {
+            break;
+        }
+        delivered_vector = vector;
+        if (!DeliverThroughIvt(harness, &state, vector))
+        {
+            delivery_faulted = true;
             break;
         }
     }
@@ -308,13 +385,34 @@ void ExecuteTest(ExecuteHarness* harness, const rex86::sst::MooFile& file,
     {
         ++totals->skipped_unimplemented;
     }
+    else if (delivery_faulted)
+    {
+        // A fault while pushing the frame is a double fault on the rig,
+        // which the suite filters out; not represented here.
+        ++totals->skipped_exception;
+    }
+    else if (delivered_vector == 0 && !test.has_exception)
+    {
+        // A handful of IDIV tests show the 386EX completing a divide
+        // whose quotient overflows (writing AL=0x80 and a remainder
+        // taken at q=-128) where the SDM faults. The predicate is
+        // unresolved; see the analysis topic. The core keeps the SDM
+        // fault.
+        ++totals->skipped_hw_quirk;
+    }
+    else if (delivered_vector == 12 && PopaCommitsBeforeFault(decoded, test))
+    {
+        // The 386EX commits the registers POPA popped before the slot
+        // that crossed the stack limit, where the SDM's fault is precise.
+        // The core keeps the SDM; see the analysis topic.
+        ++totals->skipped_hw_quirk;
+    }
     else if ((step.status == rex86::interp::StepStatus::kRetiredAndStopped &&
               step.event.reason != rex86::StopReason::kHalted) ||
              step.status == rex86::interp::StepStatus::kStopped)
     {
-        // INT n and declined port reads stop for the host by design; the
-        // hardware completed them itself, so the final states are
-        // incomparable.
+        // Declined port reads stop for the host by design; the hardware
+        // completed them itself, so the final states are incomparable.
         ++totals->skipped_boundary;
     }
     else if (step.status == rex86::interp::StepStatus::kFaulted)
@@ -331,16 +429,6 @@ void ExecuteTest(ExecuteHarness* harness, const rex86::sst::MooFile& file,
             // The rig's physical bus wraps at 24 bits; a linear address
             // beyond 16 MiB is unrepresentable in this flat harness.
             ++totals->skipped_unrepresentable;
-        }
-        else if (step.event.fault_kind == rex86::FaultKind::kDivide &&
-                 !test.has_exception)
-        {
-            // A handful of IDIV tests show the 386EX completing a divide
-            // whose quotient overflows (writing AL=0x80 and a remainder
-            // taken at q=-128) where the SDM faults. The predicate is
-            // unresolved; see the analysis topic. The core keeps the SDM
-            // fault.
-            ++totals->skipped_hw_quirk;
         }
         else
         {
@@ -400,6 +488,50 @@ void ExecuteTest(ExecuteHarness* harness, const rex86::sst::MooFile& file,
     else
     {
         ++totals->executed;
+        // The exception the hardware recorded must be the one the core
+        // raised: same vector, or none on both sides.
+        const int expected_vector =
+            test.has_exception ? test.exception.number : -1;
+        if (expected_vector != delivered_vector)
+        {
+            failed = true;
+            char text[96];
+            std::snprintf(text, sizeof text,
+                          "exception actual=%d expected=%d (-1: none)",
+                          delivered_vector, expected_vector);
+            failure = text;
+        }
+        // The defined EFLAGS bits, for the register and for the FLAGS
+        // image a delivery pushed (EXCP's flag_address).
+        std::uint32_t flags_mask = 0xFFFFFFFFu;
+        if (test.final_state.has_masks &&
+            test.final_state.masks.Has(rex86::sst::kRegEflags))
+        {
+            flags_mask = test.final_state.masks.values[rex86::sst::kRegEflags];
+        }
+        else if (file.has_file_masks &&
+                 file.file_masks.Has(rex86::sst::kRegEflags))
+        {
+            flags_mask = file.file_masks.values[rex86::sst::kRegEflags];
+        }
+        // The SMM register dump reports the 386's nonexistent EFLAGS bits
+        // (18-31) as ones, while the architectural register pushes them as
+        // zeros (PUSHFD image). Compare only the bits the register has,
+        // and only the flags the csv's f_umask calls defined.
+        flags_mask &= 0x0003FFFFu;
+        flags_mask &= csv_defined_flags | 0xFFFF0000u;
+        if (decoded.instruction.mnemonic == ZYDIS_MNEMONIC_AAM &&
+            decoded.operands[0].type == ZYDIS_OPERAND_TYPE_IMMEDIATE &&
+            decoded.operands[0].imm.value.u == 0)
+        {
+            // AAM 0 raises #DE on both sides, but the 386EX has already
+            // rewritten SF/ZF/PF by a rule not yet resolved; the SDM's
+            // fault leaves them. Everything else is compared. See the
+            // analysis topic.
+            flags_mask &= ~(rex86::kEflagsSign | rex86::kEflagsZero |
+                            rex86::kEflagsParity);
+        }
+
         // Registers: only those FINA carries, undefined bits removed by
         // the RM32 masks (a set mask bit marks an undefined bit).
         for (std::size_t index = 0;
@@ -431,13 +563,7 @@ void ExecuteTest(ExecuteHarness* harness, const rex86::sst::MooFile& file,
             }
             if (index == rex86::sst::kRegEflags)
             {
-                // The SMM register dump reports the 386's nonexistent
-                // EFLAGS bits (18-31) as ones, while the architectural
-                // register pushes them as zeros (PUSHFD image). Compare
-                // only the bits the register has, and only the flags the
-                // csv's f_umask calls defined.
-                compare_mask &= 0x0003FFFFu;
-                compare_mask &= csv_defined_flags | 0xFFFF0000u;
+                compare_mask = flags_mask;
             }
             const std::uint32_t expected = test.final_state.regs.values[index];
             if (((actual ^ expected) & compare_mask) != 0)
@@ -459,7 +585,18 @@ void ExecuteTest(ExecuteHarness* harness, const rex86::sst::MooFile& file,
             }
             std::uint8_t actual = 0;
             harness->memory().Read8(entry.address, &actual);
-            if (actual != entry.value)
+            // The pushed FLAGS image carries the same undefined flags as
+            // the register at the fault; upstream records its address
+            // for exactly this masking.
+            std::uint8_t byte_mask = 0xFFu;
+            if (test.has_exception &&
+                entry.address - test.exception.flag_address < 2u)
+            {
+                byte_mask = static_cast<std::uint8_t>(
+                    flags_mask >>
+                    (8u * (entry.address - test.exception.flag_address)));
+            }
+            if (((actual ^ entry.value) & byte_mask) != 0)
             {
                 failed = true;
                 char text[96];
@@ -472,6 +609,10 @@ void ExecuteTest(ExecuteHarness* harness, const rex86::sst::MooFile& file,
         if (!failed)
         {
             ++totals->exec_passed;
+            if (delivered_vector >= 0)
+            {
+                ++totals->delivered;
+            }
         }
     }
 
@@ -928,6 +1069,7 @@ int main(int argc, char** argv)
                   << " executed=" << totals.executed
                   << " passed=" << totals.exec_passed
                   << " mismatches=" << totals.exec_mismatches
+                  << " delivered=" << totals.delivered
                   << " skipped_unimplemented="
                   << totals.skipped_unimplemented
                   << " skipped_exception=" << totals.skipped_exception

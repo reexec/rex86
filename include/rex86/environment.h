@@ -55,6 +55,10 @@ enum class FaultKind : std::uint8_t
     kOverflow,
     kBound,
     kGeneralProtection,
+    // A limit or presence violation through SS: stack operations and
+    // SS-based memory operands (#SS, interrupt 12). Other segments raise
+    // kGeneralProtection.
+    kStackFault,
     kOther,
 };
 

@@ -83,6 +83,13 @@ public:
     bool Decode(const std::uint8_t* bytes, std::size_t length,
                 std::uint32_t guest_address, DecodedInstruction* out) const;
 
+    // As above; on failure `truncated` says whether the bytes ran out
+    // before the instruction ended (a valid prefix of a longer encoding),
+    // as opposed to an invalid encoding.
+    bool Decode(const std::uint8_t* bytes, std::size_t length,
+                std::uint32_t guest_address, DecodedInstruction* out,
+                bool* truncated) const;
+
 private:
     ZydisDecoder decoder_{};
 };

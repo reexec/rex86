@@ -118,17 +118,19 @@ ExecStatus ExecPopSegment(Ctx* ctx)
     const ZydisDecodedOperand& operand = ctx->decoded.operands[0];
     const unsigned width = ctx->decoded.instruction.operand_width;
     const Segment target = SegmentRegisterOf(operand);
-    const std::uint32_t saved_esp = ctx->state.Get(Gpr::kEsp);
+    // A 32-bit POP sreg reads only the selector word and then moves the
+    // stack pointer by four: the 386EX takes no limit fault for the
+    // upper word (SingleStepTests, design #17), and the SDM discards it.
+    CpuState& s = ctx->state;
+    const std::uint32_t sp_mask = StackPointerMask(s);
+    const std::uint32_t sp = s.Get(Gpr::kEsp);
     std::uint32_t value = 0;
-    if (!Pop(ctx, width, &value))
+    if (!ReadVirtual(ctx, Segment::kSs, sp & sp_mask, 16, &value) ||
+        !LoadSegment(ctx, target, static_cast<std::uint16_t>(value)))
     {
         return ExecStatus::kFault;
     }
-    if (!LoadSegment(ctx, target, static_cast<std::uint16_t>(value)))
-    {
-        ctx->state.Set(Gpr::kEsp, saved_esp);
-        return ExecStatus::kFault;
-    }
+    s.Set(Gpr::kEsp, ((sp + width / 8u) & sp_mask) | (sp & ~sp_mask));
     if (target == Segment::kSs)
     {
         ctx->inhibit_interrupts = true;

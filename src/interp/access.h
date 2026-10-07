@@ -31,6 +31,11 @@ struct Ctx
     // Set by MOV SS, POP SS and an STI that enabled IF: no external
     // interrupt at the next boundary (design #15, decision 2).
     bool inhibit_interrupts = false;
+    // Set by a REP string instruction: a fault keeps the completed
+    // iterations' register updates, which are architectural. Every other
+    // fault restores the integer state the instruction started from
+    // (design #17, decision 6).
+    bool keep_partial_state = false;
 
     void Fault(FaultKind kind, std::uint32_t address, bool on_write);
 };
@@ -52,10 +57,10 @@ Segment SegmentOf(const decode::DecodedInstruction& decoded,
 std::uint32_t EffectiveAddress(const Ctx& ctx,
                                const ZydisDecodedOperand& operand);
 
-// Data access through a segment: limit check (kGeneralProtection), then
-// guest memory (kAccessViolation), little-endian. width_bits is 8, 16 or
-// 32. A store to a kTranslated page clears the flag and reports
-// OnCodePageWritten before the store.
+// Data access through a segment: limit check (kStackFault through SS,
+// kGeneralProtection otherwise), then guest memory (kAccessViolation),
+// little-endian. width_bits is 8, 16 or 32. A store to a kTranslated page
+// clears the flag and reports OnCodePageWritten before the store.
 bool ReadVirtual(Ctx* ctx, Segment segment, std::uint32_t offset,
                  unsigned width_bits, std::uint32_t* value);
 bool WriteVirtual(Ctx* ctx, Segment segment, std::uint32_t offset,
@@ -67,6 +72,11 @@ bool ReadOperand(Ctx* ctx, const ZydisDecodedOperand& operand,
                  std::uint32_t* value);
 bool WriteOperand(Ctx* ctx, const ZydisDecodedOperand& operand,
                   std::uint32_t value);
+
+// A near branch target must lie within the CS limit, or the branch
+// faults with kGeneralProtection before anything is committed (SDM: JMP,
+// CALL, RET). A flat CS never fails.
+bool CheckBranchTarget(Ctx* ctx, std::uint32_t target);
 
 // Loads a segment register through Environment::LoadDescriptor, for
 // every selector including null (design #15, decision 1). CS must come
