@@ -80,7 +80,9 @@ if(REX86_BUILD_TESTS)
         tests/unit/cpu_test.cpp
         tests/unit/decoder_test.cpp
         tests/unit/census_test.cpp
+        tests/unit/moo_reader_test.cpp
         src/tools/census/census.cpp
+        src/tools/sst/moo_reader.cpp
     )
     # The decoder and census tests include internal headers under src/,
     # which is deliberate: the public contract does not expose the decoder.
@@ -102,6 +104,22 @@ if(REX86_BUILD_TESTS)
         target_include_directories(rex86_census PRIVATE src)
         target_link_libraries(rex86_census
             PRIVATE rex86::core rex86_warnings rex86_zydis)
+
+        # The SingleStepTests runner (design #7). The suite's MOO files stay
+        # outside the repository; point REX86_SST_DIR at a gunzipped copy to
+        # register the ctest entry.
+        add_executable(rex86_sst
+            src/tools/sst/main.cpp
+            src/tools/sst/moo_reader.cpp
+        )
+        target_include_directories(rex86_sst PRIVATE src)
+        target_link_libraries(rex86_sst
+            PRIVATE rex86::core rex86_warnings rex86_zydis)
+        set(REX86_SST_DIR "" CACHE PATH
+            "Directory of gunzipped SingleStepTests .MOO files")
+        if(REX86_SST_DIR)
+            add_test(NAME rex86_sst COMMAND rex86_sst "${REX86_SST_DIR}")
+        endif()
     endif()
 
     # Under Emscripten an executable is a .js loader plus a .wasm module, and

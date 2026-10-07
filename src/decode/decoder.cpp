@@ -144,14 +144,18 @@ bool DecodedInstruction::DirectTarget(std::uint32_t* target) const
     return false;
 }
 
-Decoder::Decoder()
+Decoder::Decoder(const Mode mode)
 {
-    // The mode is fixed: design #5 scopes the decoder to 32-bit flat code.
-    // 16-bit code segments widen this to a mode argument in the interpreter
-    // task. Initialization cannot fail for a valid mode/width pair, but the
+    // Initialization cannot fail for a valid mode/width pair, but the
     // result is still checked so a future constant slip fails loudly.
-    if (!ZYAN_SUCCESS(ZydisDecoderInit(&decoder_, ZYDIS_MACHINE_MODE_LEGACY_32,
-                                       ZYDIS_STACK_WIDTH_32)))
+    const bool ok = mode == Mode::kLegacy16
+        ? ZYAN_SUCCESS(ZydisDecoderInit(&decoder_,
+                                        ZYDIS_MACHINE_MODE_LEGACY_16,
+                                        ZYDIS_STACK_WIDTH_16))
+        : ZYAN_SUCCESS(ZydisDecoderInit(&decoder_,
+                                        ZYDIS_MACHINE_MODE_LEGACY_32,
+                                        ZYDIS_STACK_WIDTH_32));
+    if (!ok)
     {
         decoder_.machine_mode = ZYDIS_MACHINE_MODE_MAX_VALUE;
     }
