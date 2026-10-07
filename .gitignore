@@ -1,0 +1,26 @@
+# Build trees. Anchored with a leading slash so the pattern cannot swallow a
+# same-named source directory deeper in the tree.
+/build/
+/out/
+/cmake-build-*/
+/CMakeUserPresets.json
+
+# Guest images used while testing locally. The core is tested with synthetic
+# code generated at run time; original executables never enter the repository.
+*.exe
+*.dll
+*.img
+*.iso
+*.bin
+*.chd
+*.zip
+*.7z
+
+# Editor and toolchain scratch.
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+compile_commands.json
+__pycache__/
