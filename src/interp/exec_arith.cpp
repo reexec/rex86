@@ -788,7 +788,12 @@ ExecStatus ExecuteArith2(Ctx* ctx, Event* stop_event)
 ExecStatus ExecuteExtended(Ctx* ctx, std::uint32_t* next_eip,
                            Event* stop_event)
 {
-    ExecStatus status = ExecuteArith2(ctx, stop_event);
+    ExecStatus status = ExecuteX87(ctx);
+    if (status != ExecStatus::kUnimplemented)
+    {
+        return status;
+    }
+    status = ExecuteArith2(ctx, stop_event);
     if (status != ExecStatus::kUnimplemented)
     {
         return status;

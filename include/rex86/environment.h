@@ -59,6 +59,9 @@ enum class FaultKind : std::uint8_t
     // SS-based memory operands (#SS, interrupt 12). Other segments raise
     // kGeneralProtection.
     kStackFault,
+    // An unmasked x87 exception pending at a waiting x87 instruction (#MF,
+    // interrupt 16). The status word says which; the handler clears it.
+    kFloatingPoint,
     kOther,
 };
 

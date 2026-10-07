@@ -1,5 +1,5 @@
 // Interpreter increment 3 (#15): segment-register loads, far control
-// flow at a single privilege level, IRET, WAIT and the privileged
+// flow at a single privilege level, IRET and the privileged
 // instructions a user-mode core refuses. Every segment load goes through
 // LoadSegment, so the host's LoadDescriptor decides what a selector means
 // (design #15, decisions 1 and 3).
@@ -295,18 +295,6 @@ ExecStatus ExecuteSegments(Ctx* ctx, std::uint32_t* next_eip)
         case ZYDIS_MNEMONIC_IRET:
         case ZYDIS_MNEMONIC_IRETD:
             return ExecInterruptReturn(ctx, next_eip);
-        case ZYDIS_MNEMONIC_FWAIT:
-            // No x87 exception is pending unless the status word's ES bit
-            // is set; the x87 increment refines this into #MF.
-            if ((ctx->state.x87.status_word & 0x0080u) != 0)
-            {
-                ctx->Fault(FaultKind::kOther,
-                           ctx->state.Seg(Segment::kCs).base +
-                               ctx->state.eip,
-                           false);
-                return ExecStatus::kFault;
-            }
-            return ExecStatus::kContinue;
         case ZYDIS_MNEMONIC_CLTS:
         case ZYDIS_MNEMONIC_LGDT:
         case ZYDIS_MNEMONIC_LIDT:

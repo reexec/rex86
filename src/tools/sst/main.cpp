@@ -222,6 +222,7 @@ int DeliverableVector(const rex86::interp::StepResult& step)
         case rex86::FaultKind::kIllegalInstruction: return 6;
         case rex86::FaultKind::kStackFault: return 12;
         case rex86::FaultKind::kGeneralProtection: return 13;
+        case rex86::FaultKind::kFloatingPoint: return 16;
         default: return -1;
     }
 }
@@ -348,6 +349,21 @@ void ExecuteTest(ExecuteHarness* harness, const rex86::sst::MooFile& file,
     std::uint32_t eip_after_first = 0;
     int delivered_vector = -1;
     bool delivery_faulted = false;
+    // Did the tested instruction overwrite its own trailing HLT? The 386
+    // had already prefetched it and halts there (67A5.MOO #442 records EIP
+    // just past it), while the core executes the bytes now in memory: the
+    // two runs diverge, whatever the core meets next. Checked right after
+    // the tested instruction, before a delivered frame can land there.
+    const std::uint32_t hlt_linear =
+        ((test.initial.regs.Has(rex86::sst::kRegCs)
+              ? test.initial.regs.values[rex86::sst::kRegCs] & 0xFFFFu
+              : 0u)
+         << 4) +
+        (test.initial.regs.Has(rex86::sst::kRegEip)
+             ? test.initial.regs.values[rex86::sst::kRegEip]
+             : 0u) +
+        static_cast<std::uint32_t>(test.bytes.size()) - 1u;
+    bool hlt_overwritten = false;
     for (;;)
     {
         step = rex86::interp::Step(state, harness->memory(), *harness,
@@ -356,6 +372,13 @@ void ExecuteTest(ExecuteHarness* harness, const rex86::sst::MooFile& file,
         if (instructions == 1)
         {
             eip_after_first = state.eip;
+            std::uint8_t hlt_byte = 0xF4u;
+            harness->memory().Read8(hlt_linear, &hlt_byte);
+            // Only when execution falls through to it: a far CALL may push
+            // over the spot and branch away (669A.MOO #611).
+            hlt_overwritten = !test.bytes.empty() &&
+                test.bytes.back() == 0xF4u && hlt_byte != 0xF4u &&
+                state.Seg(rex86::Segment::kCs).base + state.eip == hlt_linear;
         }
         if (instructions > 32)
         {
@@ -384,6 +407,10 @@ void ExecuteTest(ExecuteHarness* harness, const rex86::sst::MooFile& file,
         instructions == 1)
     {
         ++totals->skipped_unimplemented;
+    }
+    else if (hlt_overwritten)
+    {
+        ++totals->skipped_unrepresentable;
     }
     else if (delivery_faulted)
     {
@@ -451,39 +478,16 @@ void ExecuteTest(ExecuteHarness* harness, const rex86::sst::MooFile& file,
     }
     else if (step.status != rex86::interp::StepStatus::kRetiredAndStopped)
     {
-        // Did the tested instruction overwrite its own trailing HLT? Then
-        // the hardware never halted either, and the recorded final state
-        // is wherever the rig interrupted it -- unknowable here.
-        const std::uint32_t hlt_linear =
-            ((test.initial.regs.Has(rex86::sst::kRegCs)
-                  ? test.initial.regs.values[rex86::sst::kRegCs] & 0xFFFFu
-                  : 0u)
-             << 4) +
-            (test.initial.regs.Has(rex86::sst::kRegEip)
-                 ? test.initial.regs.values[rex86::sst::kRegEip]
-                 : 0u) +
-            static_cast<std::uint32_t>(test.bytes.size()) - 1u;
-        std::uint8_t hlt_byte = 0xF4u;
-        harness->memory().Read8(hlt_linear, &hlt_byte);
-        if (!test.bytes.empty() && test.bytes.back() == 0xF4u &&
-            hlt_byte != 0xF4u)
-        {
-            ++totals->skipped_unrepresentable;
-        }
-        else
-        {
-            // A runaway or an unimplemented stop after the first
-            // instruction: the tested instruction steered execution
-            // somewhere wrong.
-            failed = true;
-            char text[96];
-            std::snprintf(text, sizeof text,
-                          "did not reach the trailing hlt (status=%d "
-                          "steps=%d eip=0x%08X eip_after_first=0x%08X)",
-                          static_cast<int>(step.status), instructions,
-                          state.eip, eip_after_first);
-            failure = text;
-        }
+        // A runaway or an unimplemented stop after the first instruction:
+        // the tested instruction steered execution somewhere wrong.
+        failed = true;
+        char text[96];
+        std::snprintf(text, sizeof text,
+                      "did not reach the trailing hlt (status=%d "
+                      "steps=%d eip=0x%08X eip_after_first=0x%08X)",
+                      static_cast<int>(step.status), instructions,
+                      state.eip, eip_after_first);
+        failure = text;
     }
     else
     {

@@ -9,7 +9,8 @@ if(NOT REX86_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
     message(FATAL_ERROR "VERSION must be major.minor.patch, got '${REX86_VERSION}'")
 endif()
 
-# C is for the vendored Zydis amalgamation; the core itself is C++.
+# C is for the vendored Zydis amalgamation and SoftFloat; the core itself
+# is C++.
 project(rex86 VERSION "${REX86_VERSION}" LANGUAGES C CXX)
 message(STATUS "rex86 version ${REX86_VERSION}")
 
@@ -48,6 +49,31 @@ add_library(rex86_zydis STATIC
 target_include_directories(rex86_zydis PUBLIC third_party/zydis)
 target_compile_definitions(rex86_zydis PUBLIC ZYDIS_STATIC_BUILD)
 
+# The vendored Berkeley SoftFloat 3 (BSD 3-Clause; see
+# THIRD_PARTY_NOTICES.md): the source list of its template-FAST_INT64
+# build with the 8086 (x87) specialization, unmodified, plus rex86's own
+# platform.h. Like Zydis it does not get rex86_warnings. The core links it
+# PRIVATE: only src/fpu/ includes its headers.
+file(GLOB REX86_SOFTFLOAT_SOURCES CONFIGURE_DEPENDS
+    third_party/softfloat/source/*.c
+    third_party/softfloat/source/8086/*.c
+)
+add_library(rex86_softfloat STATIC ${REX86_SOFTFLOAT_SOURCES})
+target_include_directories(rex86_softfloat
+    PRIVATE third_party/softfloat/source/8086
+    PUBLIC third_party/softfloat/rex86 third_party/softfloat/source/include
+)
+target_compile_definitions(rex86_softfloat
+    PUBLIC SOFTFLOAT_FAST_INT64
+    PRIVATE SOFTFLOAT_ROUND_ODD SOFTFLOAT_FAST_DIV32TO16
+            SOFTFLOAT_FAST_DIV64TO32
+)
+if(MSVC)
+    # SoftFloat is C99; MSVC's C front end accepts it but warns about
+    # conversions SoftFloat makes on purpose.
+    target_compile_options(rex86_softfloat PRIVATE /W0)
+endif()
+
 # The core: the CPU state, the guest memory view, the host contract, the
 # decoder and the Cpu. No OS header is included anywhere under include/ or
 # src/; what the core needs from the OS arrives through Environment and
@@ -59,11 +85,17 @@ add_library(rex86_core STATIC
     src/guest_memory.cpp
     src/cpu.cpp
     src/decode/decoder.cpp
+    src/fpu/float80.cpp
+    src/fpu/x87_math.cpp
     src/interp/access.cpp
     src/interp/exec_arith.cpp
     src/interp/exec_bcd.cpp
     src/interp/exec_segments.cpp
     src/interp/exec_strings.cpp
+    src/interp/exec_x87.cpp
+    src/interp/exec_x87_env.cpp
+    src/interp/x87_access.cpp
+    src/interp/x87_stack.cpp
     src/interp/interpreter.cpp
 )
 add_library(rex86::core ALIAS rex86_core)
@@ -72,7 +104,7 @@ target_include_directories(rex86_core PUBLIC
 )
 target_include_directories(rex86_core PRIVATE src)
 target_compile_definitions(rex86_core PRIVATE REX86_VERSION="${REX86_VERSION}")
-target_link_libraries(rex86_core PRIVATE rex86_warnings rex86_zydis)
+target_link_libraries(rex86_core PRIVATE rex86_warnings rex86_zydis rex86_softfloat)
 
 if(REX86_BUILD_TESTS)
     include(CTest)
@@ -88,6 +120,7 @@ if(REX86_BUILD_TESTS)
         tests/unit/census_test.cpp
         tests/unit/moo_reader_test.cpp
         tests/unit/interp_test.cpp
+        tests/unit/x87_test.cpp
         src/tools/census/census.cpp
         src/tools/sst/moo_reader.cpp
     )
@@ -127,6 +160,19 @@ if(REX86_BUILD_TESTS)
         if(REX86_SST_DIR)
             add_test(NAME rex86_sst COMMAND rex86_sst "${REX86_SST_DIR}")
         endif()
+    endif()
+
+    # The x87 host-CPU comparison fuzz (design #19, decision 6): the host
+    # executes the same x87 bytes as the core, so it builds only where the
+    # host is x86 Linux. A fixed-seed short run is a ctest entry; longer
+    # runs take an iteration count and a seed.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
+       CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|i[3-6]86)$")
+        add_executable(rex86_x87_fuzz tests/host/linux/x87_fuzz.cpp)
+        target_include_directories(rex86_x87_fuzz PRIVATE src)
+        target_link_libraries(rex86_x87_fuzz
+            PRIVATE rex86::core rex86_warnings rex86_zydis)
+        add_test(NAME rex86_x87_fuzz COMMAND rex86_x87_fuzz 20000 1)
     endif()
 
     # Under Emscripten an executable is a .js loader plus a .wasm module, and
