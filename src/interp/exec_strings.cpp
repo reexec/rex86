@@ -106,6 +106,7 @@ ExecStatus ExecuteStrings(Ctx* ctx, Event* stop_event)
     const bool repe = (d.instruction.attributes &
                        (ZYDIS_ATTRIB_HAS_REP | ZYDIS_ATTRIB_HAS_REPE)) != 0;
 
+    ctx->keep_partial_state = has_rep;
     while (true)
     {
         if (has_rep && ReadIndex(s, Gpr::kEcx, address_mask) == 0)

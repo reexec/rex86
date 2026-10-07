@@ -571,4 +571,127 @@ void RunInterpTests(rex86::test::Context& context)
         REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEsp),
                        Machine::kStackTop);
     }
+    // --- exception semantics (#17) ---
+    using rex86::FaultKind;
+    using rex86::Segment;
+    {
+        // A limit violation through SS is #SS (kStackFault); through DS it
+        // is #GP. Neither retires.
+        Machine m({0x58, 0xF4});  // pop eax
+        m.cpu.state().Seg(Segment::kSs).limit = Machine::kStackTop + 2;
+        const rex86::Event event = m.cpu.Run(100);
+        REX86_CHECK(context, event.fault_kind == FaultKind::kStackFault);
+        REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEsp),
+                       Machine::kStackTop);
+        REX86_CHECK_EQ(context, m.cpu.state().eip, Machine::kCodeBase);
+
+        Machine d({0xA1, 0x00, 0x20, 0x00, 0x00, 0xF4});  // mov eax, [0x2000]
+        d.cpu.state().Seg(Segment::kDs).limit = 0x1FFF;
+        REX86_CHECK(context,
+                    d.cpu.Run(100).fault_kind ==
+                        FaultKind::kGeneralProtection);
+    }
+    {
+        // Faults are precise: POP to a faulting destination and LEAVE over
+        // a faulting frame leave ESP and EBP as they were.
+        Machine m({0x8F, 0x05, 0x00, 0x20, 0x00, 0x00,  // pop dword [0x2000]
+                   0xF4});
+        m.cpu.state().Seg(Segment::kDs).limit = 0x1FFF;
+        REX86_CHECK(context, m.cpu.Run(100).fault_kind ==
+                                 FaultKind::kGeneralProtection);
+        REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEsp),
+                       Machine::kStackTop);
+
+        Machine leave({0xC9, 0xF4});  // leave
+        leave.cpu.state().Seg(Segment::kSs).limit = Machine::kStackTop;
+        leave.cpu.state().Set(Gpr::kEbp, Machine::kStackTop);
+        REX86_CHECK(context,
+                    leave.cpu.Run(100).fault_kind == FaultKind::kStackFault);
+        REX86_CHECK_EQ(context, leave.cpu.state().Get(Gpr::kEsp),
+                       Machine::kStackTop);
+        REX86_CHECK_EQ(context, leave.cpu.state().Get(Gpr::kEbp),
+                       Machine::kStackTop);
+    }
+    {
+        // A branch beyond the CS limit faults #GP at the branch; a CALL
+        // pushes nothing.
+        Machine m({0xE9, 0xFB, 0x1F, 0x00, 0x00});  // jmp 0x3000
+        m.cpu.state().Seg(Segment::kCs).limit = 0x1FFF;
+        REX86_CHECK(context, m.cpu.Run(100).fault_kind ==
+                                 FaultKind::kGeneralProtection);
+        REX86_CHECK_EQ(context, m.cpu.state().eip, Machine::kCodeBase);
+
+        Machine call({0xE8, 0xFB, 0x1F, 0x00, 0x00});  // call 0x3000
+        call.cpu.state().Seg(Segment::kCs).limit = 0x1FFF;
+        REX86_CHECK(context, call.cpu.Run(100).fault_kind ==
+                                 FaultKind::kGeneralProtection);
+        REX86_CHECK_EQ(context, call.cpu.state().Get(Gpr::kEsp),
+                       Machine::kStackTop);
+        REX86_CHECK_EQ(context, call.buffer[Machine::kStackTop - 4],
+                       std::uint8_t{0});
+    }
+    {
+        // An instruction that does not fit below the CS limit is #GP, not
+        // an illegal instruction.
+        Machine m({0xB8, 0x01, 0x02, 0x03, 0x04});  // mov eax, imm32
+        m.cpu.state().Seg(Segment::kCs).limit = Machine::kCodeBase + 2;
+        const rex86::Event event = m.cpu.Run(100);
+        REX86_CHECK(context,
+                    event.fault_kind == FaultKind::kGeneralProtection);
+        REX86_CHECK(context, event.fault_on_fetch);
+    }
+    {
+        // BT over memory with a register offset accesses one operand-size
+        // unit: bit 31 of the dword below for offset -1, and a word that
+        // crosses the limit faults.
+        Machine m({0xBB, 0x00, 0x20, 0x00, 0x00,  // mov ebx, 0x2000
+                   0x83, 0xC8, 0xFF,              // or eax, -1
+                   0x0F, 0xA3, 0x03,              // bt [ebx], eax
+                   0xF4});
+        m.buffer[0x1FFF] = 0x80;
+        REX86_CHECK(context, m.cpu.Run(100).reason == StopReason::kHalted);
+        REX86_CHECK(context,
+                    (m.cpu.state().eflags & rex86::kEflagsCarry) != 0);
+
+        Machine w({0xBB, 0x00, 0x20, 0x00, 0x00,  // mov ebx, 0x2000
+                   0x31, 0xC0,                    // xor eax, eax
+                   0x66, 0x0F, 0xA3, 0x03,        // bt [ebx], ax
+                   0xF4});
+        w.cpu.state().Seg(Segment::kDs).limit = 0x2000;
+        REX86_CHECK(context, w.cpu.Run(100).fault_kind ==
+                                 FaultKind::kGeneralProtection);
+    }
+    {
+        // PUSHAD stores from the lowest slot up and moves ESP only on
+        // success: a fault on the EBX slot leaves EDI..ESP written.
+        Machine m({0x60, 0xF4});  // pushad
+        const std::uint32_t esp = 0xE010;
+        m.cpu.state().Set(Gpr::kEsp, esp);
+        m.cpu.state().Set(Gpr::kEdi, 0x11);
+        m.memory.pages().Set(0xE000, rex86::kGuestPageSize,
+                             rex86::kPageReadExecute);
+        REX86_CHECK(context, m.cpu.Run(100).fault_kind ==
+                                 FaultKind::kAccessViolation);
+        REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEsp), esp);
+        REX86_CHECK_EQ(context, m.buffer[esp - 32], std::uint8_t{0x11});
+        REX86_CHECK_EQ(context, m.buffer[esp - 20], std::uint8_t{0x10});
+    }
+    {
+        // A 32-bit POP DS reads the selector word only: no limit fault
+        // for the upper word, and ESP still moves by four.
+        Machine m({0x1F, 0xF4});  // pop ds
+        m.cpu.state().Seg(Segment::kSs).limit = Machine::kStackTop + 1;
+        m.buffer[Machine::kStackTop] = 0x2B;
+        REX86_CHECK(context, m.cpu.Run(100).reason == StopReason::kHalted);
+        REX86_CHECK_EQ(context, m.cpu.state().Seg(Segment::kDs).selector,
+                       std::uint16_t{0x2B});
+        REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEsp),
+                       Machine::kStackTop + 4);
+    }
+    {
+        // RTM's XBEGIN (C7 F8) is #UD on this core's CPU.
+        Machine m({0xC7, 0xF8, 0x00, 0x00, 0x00, 0x00, 0xF4});
+        REX86_CHECK(context, m.cpu.Run(100).fault_kind ==
+                                 FaultKind::kIllegalInstruction);
+    }
 }

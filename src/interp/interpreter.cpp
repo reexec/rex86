@@ -5,6 +5,9 @@
 #include "interp/exec.h"
 #include "interp/flags.h"
 
+#include <array>
+#include <cstddef>
+
 namespace rex86::interp
 {
 
@@ -31,10 +34,6 @@ const decode::Decoder& DecoderFor(const bool default_32bit)
     return default_32bit ? decoder32 : decoder16;
 }
 
-std::uint32_t InstructionPointerMask(const CpuState& state)
-{
-    return state.Seg(Segment::kCs).default_32bit ? 0xFFFFFFFFu : 0xFFFFu;
-}
 
 bool ConditionHolds(const ZydisMnemonic mnemonic, const CpuState& state)
 {
@@ -147,7 +146,11 @@ ExecStatus Execute(Ctx* ctx, std::uint32_t* next_eip, Event* stop_event)
     const ZydisMnemonic mnemonic = d.instruction.mnemonic;
     const ZydisDecodedOperand* const ops = d.operands;
     const unsigned op_width = d.instruction.operand_width;
-    const std::uint32_t ip_mask = InstructionPointerMask(s);
+    // A near branch target is truncated by the operand size, not by CS.D
+    // (SDM JMP/Jcc/CALL/RET: 'IF OperandSize = 16 THEN EIP <- tempEIP AND
+    // 0000FFFFH'); an o32 branch in 16-bit code keeps all 32 bits and the
+    // CS limit check decides.
+    const std::uint32_t ip_mask = op_width == 32 ? 0xFFFFFFFFu : 0xFFFFu;
 
     switch (mnemonic)
     {
@@ -319,19 +322,29 @@ ExecStatus Execute(Ctx* ctx, std::uint32_t* next_eip, Event* stop_event)
         case ZYDIS_MNEMONIC_PUSHAD:
         case ZYDIS_MNEMONIC_PUSHA:
         {
+            // The image is the SDM's (EAX highest, EDI lowest), but the
+            // stores go from the lowest slot up, as the 386EX does: a
+            // limit fault partway leaves the lower slots written
+            // (SingleStepTests, design #17). SP moves only on success.
             const std::uint32_t original_sp = s.Get(Gpr::kEsp);
-            static constexpr Gpr kOrder[] = {Gpr::kEax, Gpr::kEcx, Gpr::kEdx,
-                                             Gpr::kEbx, Gpr::kEsp, Gpr::kEbp,
-                                             Gpr::kEsi, Gpr::kEdi};
-            for (const Gpr reg : kOrder)
+            const std::uint32_t sp_mask =
+                s.Seg(Segment::kSs).default_32bit ? 0xFFFFFFFFu : 0xFFFFu;
+            const std::uint32_t bytes = op_width / 8u;
+            static constexpr Gpr kLowestFirst[] = {
+                Gpr::kEdi, Gpr::kEsi, Gpr::kEbp, Gpr::kEsp,
+                Gpr::kEbx, Gpr::kEdx, Gpr::kEcx, Gpr::kEax};
+            std::uint32_t slot = original_sp - 8u * bytes;
+            for (const Gpr reg : kLowestFirst)
             {
-                const std::uint32_t value =
-                    reg == Gpr::kEsp ? original_sp : s.Get(reg);
-                if (!Push(ctx, op_width, value & WidthMask(op_width)))
+                if (!WriteVirtual(ctx, Segment::kSs, slot & sp_mask, op_width,
+                                  s.Get(reg) & WidthMask(op_width)))
                 {
                     return ExecStatus::kFault;
                 }
+                slot += bytes;
             }
+            s.Set(Gpr::kEsp, ((original_sp - 8u * bytes) & sp_mask) |
+                                 (original_sp & ~sp_mask));
             return ExecStatus::kContinue;
         }
         case ZYDIS_MNEMONIC_POPAD:
@@ -472,7 +485,8 @@ ExecStatus Execute(Ctx* ctx, std::uint32_t* next_eip, Event* stop_event)
             std::uint32_t target = 0;
             if (d.DirectTarget(&target))
             {
-                if (!Push(ctx, op_width, *next_eip & WidthMask(op_width)))
+                if (!CheckBranchTarget(ctx, target & ip_mask) ||
+                    !Push(ctx, op_width, *next_eip & WidthMask(op_width)))
                 {
                     return ExecStatus::kFault;
                 }
@@ -488,7 +502,9 @@ ExecStatus Execute(Ctx* ctx, std::uint32_t* next_eip, Event* stop_event)
                 return ctx->faulted ? ExecStatus::kFault
                                     : ExecStatus::kUnimplemented;
             }
-            if (!Push(ctx, op_width, *next_eip & WidthMask(op_width)))
+            if (!CheckBranchTarget(ctx,
+                                   target & WidthMask(op_width) & ip_mask) ||
+                !Push(ctx, op_width, *next_eip & WidthMask(op_width)))
             {
                 return ExecStatus::kFault;
             }
@@ -688,11 +704,13 @@ StepResult Step(CpuState& state, GuestMemory& memory,
     // faults.
     std::uint8_t bytes[kMaxInstructionBytes] = {};
     unsigned fetched = 0;
+    bool stopped_at_limit = false;
     for (; fetched < kMaxInstructionBytes; ++fetched)
     {
         const std::uint32_t offset = start_offset + fetched;
         if (!cs.IsFlat() && (!cs.present || offset > cs.limit))
         {
+            stopped_at_limit = true;
             break;
         }
         const std::uint32_t linear = cs.base + offset;
@@ -702,31 +720,44 @@ StepResult Step(CpuState& state, GuestMemory& memory,
             break;
         }
     }
+    // An instruction that does not fit below the CS limit is #GP (SDM); a
+    // fetch cut short by page attributes is the host's access violation.
     if (fetched == 0)
     {
         result.status = StepStatus::kFaulted;
         result.event.reason = StopReason::kFault;
-        result.event.fault_kind = FaultKind::kAccessViolation;
+        result.event.fault_kind = stopped_at_limit
+            ? FaultKind::kGeneralProtection
+            : FaultKind::kAccessViolation;
         result.event.fault_address = cs.base + start_offset;
         result.event.fault_on_fetch = true;
         return result;
     }
 
     decode::DecodedInstruction decoded;
+    bool truncated = false;
     if (!DecoderFor(cs.default_32bit)
-             .Decode(bytes, fetched, state.eip, &decoded))
+             .Decode(bytes, fetched, state.eip, &decoded, &truncated))
     {
         result.status = StepStatus::kFaulted;
         result.event.reason = StopReason::kFault;
         result.event.fault_kind = FaultKind::kIllegalInstruction;
+        if (stopped_at_limit && truncated)
+        {
+            result.event.fault_kind = FaultKind::kGeneralProtection;
+            result.event.fault_on_fetch = true;
+        }
         result.event.fault_address = cs.base + start_offset;
         return result;
     }
 
     // A disabled feature's instruction is an illegal instruction, per the
-    // Features contract.
+    // Features contract. RTM (XBEGIN/XABORT, which reuse the C7/C6 /7
+    // encodings) is never part of this core's CPU and raises #UD as on
+    // every processor without it.
     const ZydisISASet isa = decoded.instruction.meta.isa_set;
-    if ((isa == ZYDIS_ISA_SET_X87 && !features.x87) ||
+    if (isa == ZYDIS_ISA_SET_RTM ||
+        (isa == ZYDIS_ISA_SET_X87 && !features.x87) ||
         (isa == ZYDIS_ISA_SET_PENTIUMMMX && !features.mmx) ||
         (isa == ZYDIS_ISA_SET_SSE && !features.sse) ||
         ((isa == ZYDIS_ISA_SET_SSE2 || isa == ZYDIS_ISA_SET_SSE2MMX) &&
@@ -739,10 +770,46 @@ StepResult Step(CpuState& state, GuestMemory& memory,
         return result;
     }
 
+    // Faults are precise: the integer state the instruction started from
+    // comes back on a fault (design #17, decision 6), so semantics code
+    // need not unwind registers it changed before a later access failed.
+    // Memory stores already made stay, as on the hardware.
+    const std::array<std::uint32_t, 8> saved_gpr = state.gpr;
+    const std::uint32_t saved_eflags = state.eflags;
+    const std::array<SegmentRegister, 6> saved_segments = state.segments;
+
     Ctx ctx{state, memory, environment, decoded, Event{}, false};
-    std::uint32_t next_eip = start_offset + decoded.Length();
+    const std::uint32_t fallthrough = start_offset + decoded.Length();
+    std::uint32_t next_eip = fallthrough;
     Event stop_event;
-    const ExecStatus status = Execute(&ctx, &next_eip, &stop_event);
+    ExecStatus status = Execute(&ctx, &next_eip, &stop_event);
+
+    // A taken branch must land within the (possibly new) CS limit, or the
+    // branch itself faults (SDM: JMP, CALL, RET, IRET). Sequential flow
+    // past the limit is left to the next fetch.
+    if (status == ExecStatus::kContinue)
+    {
+        const decode::ControlFlow flow = decoded.Flow();
+        const bool branch = flow != decode::ControlFlow::kNone &&
+            flow != decode::ControlFlow::kHalt &&
+            flow != decode::ControlFlow::kSoftwareInterrupt;
+        const SegmentRegister& new_cs = state.Seg(Segment::kCs);
+        if (branch &&
+            (next_eip != fallthrough ||
+             new_cs.selector !=
+                 saved_segments[static_cast<std::size_t>(Segment::kCs)]
+                     .selector) &&
+            !CheckBranchTarget(&ctx, next_eip))
+        {
+            status = ExecStatus::kFault;
+        }
+    }
+    if (status == ExecStatus::kFault && !ctx.keep_partial_state)
+    {
+        state.gpr = saved_gpr;
+        state.eflags = saved_eflags;
+        state.segments = saved_segments;
+    }
 
     result.inhibit_interrupts = ctx.inhibit_interrupts;
     switch (status)

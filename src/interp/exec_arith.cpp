@@ -503,26 +503,28 @@ ExecStatus ExecBitTest(Ctx* ctx, const ZydisMnemonic mnemonic)
         ops[1].type == ZYDIS_OPERAND_TYPE_REGISTER)
     {
         // A register bit offset over memory addresses bits beyond the
-        // operand: the byte displacement is the signed bit index divided
-        // by eight.
+        // operand. The access is one operand-size unit at EA + (width/8) *
+        // floor(index / width), as the SDM describes and the 386EX shows
+        // (a word or dword crossing the segment limit faults).
         const std::int32_t index = static_cast<std::int32_t>(
             SignExtendTo32(offset_value & WidthMask(width), width));
+        const std::int32_t unit = index >> (width == 16 ? 4 : 5);
         const std::uint32_t byte_offset =
-            static_cast<std::uint32_t>(index >> 3);
-        const unsigned bit_index = static_cast<unsigned>(index & 7);
+            static_cast<std::uint32_t>(unit) * (width / 8u);
+        const unsigned bit_index = static_cast<unsigned>(index) & (width - 1u);
         const std::uint32_t address =
             (EffectiveAddress(*ctx, ops[0]) + byte_offset) &
             WidthMask(d.instruction.address_width);
         const Segment segment = SegmentOf(d, ops[0]);
-        std::uint32_t byte = 0;
-        if (!ReadVirtual(ctx, segment, address, 8, &byte))
+        std::uint32_t value = 0;
+        if (!ReadVirtual(ctx, segment, address, width, &value))
         {
             return ExecStatus::kFault;
         }
-        bit = ((byte >> bit_index) & 1u) != 0;
+        bit = ((value >> bit_index) & 1u) != 0;
         if (write)
         {
-            std::uint32_t updated = byte;
+            std::uint32_t updated = value;
             if (mnemonic == ZYDIS_MNEMONIC_BTS)
             {
                 updated |= 1u << bit_index;
@@ -535,7 +537,7 @@ ExecStatus ExecBitTest(Ctx* ctx, const ZydisMnemonic mnemonic)
             {
                 updated ^= 1u << bit_index;
             }
-            if (!WriteVirtual(ctx, segment, address, 8, updated))
+            if (!WriteVirtual(ctx, segment, address, width, updated))
             {
                 return ExecStatus::kFault;
             }

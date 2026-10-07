@@ -165,16 +165,29 @@ bool Decoder::Decode(const std::uint8_t* bytes, const std::size_t length,
                      const std::uint32_t guest_address,
                      DecodedInstruction* out) const
 {
+    bool truncated = false;
+    return Decode(bytes, length, guest_address, out, &truncated);
+}
+
+bool Decoder::Decode(const std::uint8_t* bytes, const std::size_t length,
+                     const std::uint32_t guest_address,
+                     DecodedInstruction* out, bool* truncated) const
+{
+    *truncated = false;
     if (bytes == nullptr || length == 0 || out == nullptr ||
         decoder_.machine_mode == ZYDIS_MACHINE_MODE_MAX_VALUE)
     {
         return false;
     }
     out->guest_address = guest_address;
-    return ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder_, bytes, length,
-                                               &out->instruction,
-                                               out->operands)) &&
-        out->instruction.length != 0;
+    const ZyanStatus status = ZydisDecoderDecodeFull(
+        &decoder_, bytes, length, &out->instruction, out->operands);
+    if (!ZYAN_SUCCESS(status))
+    {
+        *truncated = status == ZYDIS_STATUS_NO_MORE_DATA;
+        return false;
+    }
+    return out->instruction.length != 0;
 }
 
 }  // namespace rex86::decode

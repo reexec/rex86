@@ -187,7 +187,11 @@ bool Linearize(Ctx* ctx, const Segment segment, const std::uint32_t offset,
         if (!seg.present || offset > seg.limit ||
             seg.limit - offset < bytes - 1u)
         {
-            ctx->Fault(FaultKind::kGeneralProtection, offset, on_write);
+            // The SDM splits the fault by segment: through SS it is #SS,
+            // through any other segment #GP.
+            ctx->Fault(segment == Segment::kSs ? FaultKind::kStackFault
+                                               : FaultKind::kGeneralProtection,
+                       offset, on_write);
             return false;
         }
     }
@@ -364,6 +368,21 @@ bool WriteOperand(Ctx* ctx, const ZydisDecodedOperand& operand,
         default:
             return false;
     }
+}
+
+bool CheckBranchTarget(Ctx* ctx, const std::uint32_t target)
+{
+    if (ctx->faulted)
+    {
+        return false;
+    }
+    const SegmentRegister& cs = ctx->state.Seg(Segment::kCs);
+    if (!cs.IsFlat() && target > cs.limit)
+    {
+        ctx->Fault(FaultKind::kGeneralProtection, 0, false);
+        return false;
+    }
+    return true;
 }
 
 bool LoadSegment(Ctx* ctx, const Segment segment, const std::uint16_t selector)
