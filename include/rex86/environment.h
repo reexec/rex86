@@ -109,7 +109,11 @@ public:
     virtual ~Environment() = default;
 
     // The descriptor for selector, or false when the selector is invalid
-    // (the core then raises kGeneralProtection).
+    // (the core then raises kGeneralProtection). Called for every segment
+    // load, the null selector included: the host expresses "loadable but
+    // faults on use" as present = false. A CS load needs present and
+    // executable, an SS load present and writable, or the core raises
+    // kGeneralProtection.
     virtual bool LoadDescriptor(std::uint16_t selector, Descriptor* descriptor) = 0;
 
     // Port I/O. Returning false hands the access to the host as a kPortIo

@@ -18,6 +18,7 @@ enum class ExecStatus : std::uint8_t
 {
     kContinue,
     kStop,           // retired, event filled (HLT, INT n, port I/O)
+    kStopNoRetire,   // not retired, event filled (a declined INS/OUTS)
     kFault,          // not retired, ctx.fault filled
     kUnimplemented,  // decoded but not in this increment
 };
@@ -29,12 +30,22 @@ bool ConditionCodeHolds(unsigned condition_code, const CpuState& state);
 // BT family, BSF/BSR, SETcc, ENTER/LEAVE, XLAT.
 ExecStatus ExecuteArith2(Ctx* ctx, Event* stop_event);
 
-// Increment 2 (#13): MOVS/STOS/LODS/SCAS/CMPS with REP/REPE/REPNE.
-ExecStatus ExecuteStrings(Ctx* ctx);
+// Increments 2-3 (#13, #15): MOVS/STOS/LODS/SCAS/CMPS and INS/OUTS with
+// REP/REPE/REPNE.
+ExecStatus ExecuteStrings(Ctx* ctx, Event* stop_event);
+
+// Increment 3 (#15): segment-register loads, far JMP/CALL/RETF, IRET,
+// WAIT and the privileged instructions. next_eip is the fallthrough and
+// is overwritten by a taken far branch.
+ExecStatus ExecuteSegments(Ctx* ctx, std::uint32_t* next_eip);
+
+// Increment 3 (#15): AAA/AAS/DAA/DAS/AAM/AAD, BOUND, SALC.
+ExecStatus ExecuteBcd(Ctx* ctx);
 
 // The tail of the dispatch: every group file in order, then
 // kUnimplemented.
-ExecStatus ExecuteExtended(Ctx* ctx, Event* stop_event);
+ExecStatus ExecuteExtended(Ctx* ctx, std::uint32_t* next_eip,
+                           Event* stop_event);
 
 }  // namespace rex86::interp
 

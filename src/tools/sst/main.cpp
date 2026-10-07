@@ -87,9 +87,13 @@ public:
         return false;
     }
 
+    // Port writes are accepted (and discarded): an output has no
+    // architectural effect the suite records, so OUT/OUTS tests become
+    // comparable. Port reads stay declined -- nothing reproduces the rig's
+    // bus input.
     bool PortWrite(std::uint16_t, std::uint8_t, std::uint32_t) override
     {
-        return false;
+        return true;
     }
 
     bool InterruptTarget(std::uint8_t, std::uint16_t*, std::uint32_t*) override
@@ -304,16 +308,24 @@ void ExecuteTest(ExecuteHarness* harness, const rex86::sst::MooFile& file,
     {
         ++totals->skipped_unimplemented;
     }
-    else if (step.status == rex86::interp::StepStatus::kRetiredAndStopped &&
-             step.event.reason != rex86::StopReason::kHalted)
+    else if ((step.status == rex86::interp::StepStatus::kRetiredAndStopped &&
+              step.event.reason != rex86::StopReason::kHalted) ||
+             step.status == rex86::interp::StepStatus::kStopped)
     {
-        // INT n and port I/O stop for the host by design; the hardware
-        // completed them itself, so the final states are incomparable.
+        // INT n and declined port reads stop for the host by design; the
+        // hardware completed them itself, so the final states are
+        // incomparable.
         ++totals->skipped_boundary;
     }
     else if (step.status == rex86::interp::StepStatus::kFaulted)
     {
-        if (step.event.fault_kind == rex86::FaultKind::kAccessViolation &&
+        if (step.event.fault_kind == rex86::FaultKind::kPrivilegedInstruction)
+        {
+            // System instructions (CLTS, ...) run in real mode on the rig;
+            // a user-mode core refuses them by design.
+            ++totals->skipped_boundary;
+        }
+        else if (step.event.fault_kind == rex86::FaultKind::kAccessViolation &&
             step.event.fault_address >= 16u * 1024u * 1024u)
         {
             // The rig's physical bus wraps at 24 bits; a linear address

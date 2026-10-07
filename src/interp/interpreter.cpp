@@ -11,11 +11,16 @@ namespace rex86::interp
 namespace
 {
 
-// EFLAGS bits POPF/SAHF may change. Reserved bit 1 stays set, and the
-// 386-era system bits a user-mode core does not model (RF, VM) stay off.
-constexpr std::uint32_t kPopfWritable = 0x00007FD5u;
+constexpr std::uint32_t kPopfWritable = kEflagsPopWritable;
 
 constexpr unsigned kMaxInstructionBytes = 15;
+
+bool IsSegmentRegisterOperand(const ZydisDecodedOperand& operand)
+{
+    return operand.type == ZYDIS_OPERAND_TYPE_REGISTER &&
+        operand.reg.value >= ZYDIS_REGISTER_ES &&
+        operand.reg.value <= ZYDIS_REGISTER_GS;
+}
 
 const decode::Decoder& DecoderFor(const bool default_32bit)
 {
@@ -151,6 +156,10 @@ ExecStatus Execute(Ctx* ctx, std::uint32_t* next_eip, Event* stop_event)
 
         case ZYDIS_MNEMONIC_MOV:
         {
+            if (IsSegmentRegisterOperand(ops[0]))
+            {
+                return ExecuteSegments(ctx, next_eip);
+            }
             std::uint32_t value = 0;
             if (!ReadOperand(ctx, ops[1], &value))
             {
@@ -257,13 +266,9 @@ ExecStatus Execute(Ctx* ctx, std::uint32_t* next_eip, Event* stop_event)
 
         case ZYDIS_MNEMONIC_PUSH:
         {
-            // Pushing a segment register is a later increment: its 32-bit
-            // form writes only 16 bits of the slot on real hardware.
-            if (ops[0].type == ZYDIS_OPERAND_TYPE_REGISTER &&
-                ops[0].reg.value >= ZYDIS_REGISTER_ES &&
-                ops[0].reg.value <= ZYDIS_REGISTER_GS)
+            if (IsSegmentRegisterOperand(ops[0]))
             {
-                return ExecStatus::kUnimplemented;
+                return ExecuteSegments(ctx, next_eip);
             }
             std::uint32_t value = 0;
             if (!ReadOperand(ctx, ops[0], &value))
@@ -276,11 +281,9 @@ ExecStatus Execute(Ctx* ctx, std::uint32_t* next_eip, Event* stop_event)
         }
         case ZYDIS_MNEMONIC_POP:
         {
-            if (ops[0].type == ZYDIS_OPERAND_TYPE_REGISTER &&
-                ops[0].reg.value >= ZYDIS_REGISTER_ES &&
-                ops[0].reg.value <= ZYDIS_REGISTER_GS)
+            if (IsSegmentRegisterOperand(ops[0]))
             {
-                return ExecStatus::kUnimplemented;
+                return ExecuteSegments(ctx, next_eip);
             }
             std::uint32_t value = 0;
             if (!Pop(ctx, op_width, &value))
@@ -440,7 +443,7 @@ ExecStatus Execute(Ctx* ctx, std::uint32_t* next_eip, Event* stop_event)
         {
             if (d.instruction.meta.branch_type == ZYDIS_BRANCH_TYPE_FAR)
             {
-                return ExecStatus::kUnimplemented;
+                return ExecuteSegments(ctx, next_eip);
             }
             std::uint32_t target = 0;
             if (d.DirectTarget(&target))
@@ -464,7 +467,7 @@ ExecStatus Execute(Ctx* ctx, std::uint32_t* next_eip, Event* stop_event)
         {
             if (d.instruction.meta.branch_type == ZYDIS_BRANCH_TYPE_FAR)
             {
-                return ExecStatus::kUnimplemented;
+                return ExecuteSegments(ctx, next_eip);
             }
             std::uint32_t target = 0;
             if (d.DirectTarget(&target))
@@ -496,7 +499,7 @@ ExecStatus Execute(Ctx* ctx, std::uint32_t* next_eip, Event* stop_event)
         {
             if (d.instruction.meta.branch_type == ZYDIS_BRANCH_TYPE_FAR)
             {
-                return ExecStatus::kUnimplemented;
+                return ExecuteSegments(ctx, next_eip);
             }
             std::uint32_t target = 0;
             if (!Pop(ctx, op_width, &target))
@@ -527,7 +530,15 @@ ExecStatus Execute(Ctx* ctx, std::uint32_t* next_eip, Event* stop_event)
         case ZYDIS_MNEMONIC_CLD: SetFlag(s, kEflagsDirection, false); return ExecStatus::kContinue;
         case ZYDIS_MNEMONIC_STD: SetFlag(s, kEflagsDirection, true); return ExecStatus::kContinue;
         case ZYDIS_MNEMONIC_CLI: SetFlag(s, kEflagsInterrupt, false); return ExecStatus::kContinue;
-        case ZYDIS_MNEMONIC_STI: SetFlag(s, kEflagsInterrupt, true); return ExecStatus::kContinue;
+        case ZYDIS_MNEMONIC_STI:
+            // An STI that enables interrupts delays their delivery by one
+            // instruction (the `sti; hlt` idiom).
+            if (!GetFlag(s, kEflagsInterrupt))
+            {
+                ctx->inhibit_interrupts = true;
+            }
+            SetFlag(s, kEflagsInterrupt, true);
+            return ExecStatus::kContinue;
         case ZYDIS_MNEMONIC_LAHF:
             WriteGpr(s, ZYDIS_REGISTER_AH,
                      (s.eflags & 0xD5u) | kEflagsReserved1);
@@ -657,7 +668,7 @@ ExecStatus Execute(Ctx* ctx, std::uint32_t* next_eip, Event* stop_event)
         }
 
         default:
-            return ExecuteExtended(ctx, stop_event);
+            return ExecuteExtended(ctx, next_eip, stop_event);
     }
 }
 
@@ -733,6 +744,7 @@ StepResult Step(CpuState& state, GuestMemory& memory,
     Event stop_event;
     const ExecStatus status = Execute(&ctx, &next_eip, &stop_event);
 
+    result.inhibit_interrupts = ctx.inhibit_interrupts;
     switch (status)
     {
         case ExecStatus::kContinue:
@@ -742,6 +754,12 @@ StepResult Step(CpuState& state, GuestMemory& memory,
         case ExecStatus::kStop:
             state.eip = next_eip;
             result.status = StepStatus::kRetiredAndStopped;
+            result.event = stop_event;
+            return result;
+        case ExecStatus::kStopNoRetire:
+            // A restartable stop (declined string port I/O): EIP still
+            // addresses the instruction.
+            result.status = StepStatus::kStopped;
             result.event = stop_event;
             return result;
         case ExecStatus::kFault:

@@ -28,6 +28,9 @@ struct Ctx
     const decode::DecodedInstruction& decoded;
     Event fault;
     bool faulted = false;
+    // Set by MOV SS, POP SS and an STI that enabled IF: no external
+    // interrupt at the next boundary (design #15, decision 2).
+    bool inhibit_interrupts = false;
 
     void Fault(FaultKind kind, std::uint32_t address, bool on_write);
 };
@@ -64,6 +67,12 @@ bool ReadOperand(Ctx* ctx, const ZydisDecodedOperand& operand,
                  std::uint32_t* value);
 bool WriteOperand(Ctx* ctx, const ZydisDecodedOperand& operand,
                   std::uint32_t value);
+
+// Loads a segment register through Environment::LoadDescriptor, for
+// every selector including null (design #15, decision 1). CS must come
+// back present and executable, SS present and writable; any refusal is a
+// kGeneralProtection fault with the register left unchanged.
+bool LoadSegment(Ctx* ctx, Segment segment, std::uint16_t selector);
 
 // Stack operations at the given width (16 or 32), using SS and the stack
 // pointer width SS.D selects.

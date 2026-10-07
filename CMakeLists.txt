@@ -61,6 +61,8 @@ add_library(rex86_core STATIC
     src/decode/decoder.cpp
     src/interp/access.cpp
     src/interp/exec_arith.cpp
+    src/interp/exec_bcd.cpp
+    src/interp/exec_segments.cpp
     src/interp/exec_strings.cpp
     src/interp/interpreter.cpp
 )

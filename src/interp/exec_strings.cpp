@@ -1,5 +1,5 @@
-// Interpreter increment 2 (#13): the string instructions and their REP
-// prefixes. Iterations complete inside one Step (budgeted as one
+// Interpreter increments 2-3 (#13, #15): the string instructions, string
+// port I/O, and their REP prefixes. Iterations complete inside one Step (budgeted as one
 // instruction, keeping #11's loop contract), and a fault mid-string
 // leaves the architectural partial state -- updated index and count
 // registers with EIP still at the instruction -- which is exactly the
@@ -45,7 +45,7 @@ void CompareFlags(CpuState& state, const unsigned width,
 
 }  // namespace
 
-ExecStatus ExecuteStrings(Ctx* ctx)
+ExecStatus ExecuteStrings(Ctx* ctx, Event* stop_event)
 {
     CpuState& s = ctx->state;
     const decode::DecodedInstruction& d = ctx->decoded;
@@ -56,8 +56,14 @@ ExecStatus ExecuteStrings(Ctx* ctx)
     bool is_lods = false;
     bool is_scas = false;
     bool is_cmps = false;
+    bool is_ins = false;
+    bool is_outs = false;
     switch (mnemonic)
     {
+        case ZYDIS_MNEMONIC_INSB: case ZYDIS_MNEMONIC_INSW:
+        case ZYDIS_MNEMONIC_INSD: is_ins = true; break;
+        case ZYDIS_MNEMONIC_OUTSB: case ZYDIS_MNEMONIC_OUTSW:
+        case ZYDIS_MNEMONIC_OUTSD: is_outs = true; break;
         case ZYDIS_MNEMONIC_MOVSB: case ZYDIS_MNEMONIC_MOVSW:
         case ZYDIS_MNEMONIC_MOVSD: is_movs = true; break;
         case ZYDIS_MNEMONIC_STOSB: case ZYDIS_MNEMONIC_STOSW:
@@ -107,7 +113,57 @@ ExecStatus ExecuteStrings(Ctx* ctx)
             break;
         }
 
-        if (is_movs)
+        if (is_ins || is_outs)
+        {
+            // A declined port access stops before this iteration without
+            // retiring; completed iterations stay architectural, so
+            // resuming re-executes with the remaining count (design #15,
+            // decision 4).
+            const std::uint16_t port =
+                static_cast<std::uint16_t>(s.Get(Gpr::kEdx) & 0xFFFFu);
+            const std::uint8_t port_width =
+                static_cast<std::uint8_t>(bytes);
+            if (is_ins)
+            {
+                std::uint32_t value = 0;
+                if (!ctx->environment.PortRead(port, port_width, &value))
+                {
+                    stop_event->reason = StopReason::kPortIo;
+                    stop_event->port = port;
+                    stop_event->port_width = port_width;
+                    stop_event->port_is_write = false;
+                    return ExecStatus::kStopNoRetire;
+                }
+                if (!WriteVirtual(ctx, Segment::kEs,
+                                  ReadIndex(s, Gpr::kEdi, address_mask),
+                                  width, value & WidthMask(width)))
+                {
+                    return ExecStatus::kFault;
+                }
+                AdvanceIndex(s, Gpr::kEdi, address_mask, bytes);
+            }
+            else
+            {
+                std::uint32_t value = 0;
+                if (!ReadVirtual(ctx, source_segment,
+                                 ReadIndex(s, Gpr::kEsi, address_mask),
+                                 width, &value))
+                {
+                    return ExecStatus::kFault;
+                }
+                if (!ctx->environment.PortWrite(port, port_width, value))
+                {
+                    stop_event->reason = StopReason::kPortIo;
+                    stop_event->port = port;
+                    stop_event->port_width = port_width;
+                    stop_event->port_is_write = true;
+                    stop_event->port_value = value;
+                    return ExecStatus::kStopNoRetire;
+                }
+                AdvanceIndex(s, Gpr::kEsi, address_mask, bytes);
+            }
+        }
+        else if (is_movs)
         {
             std::uint32_t value = 0;
             if (!ReadVirtual(ctx, source_segment,

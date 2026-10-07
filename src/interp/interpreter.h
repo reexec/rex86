@@ -26,6 +26,10 @@ enum class StepStatus : std::uint8_t
     // The instruction did not retire: a fault. EIP still addresses the
     // faulting instruction. The event carries the fault.
     kFaulted,
+    // The instruction did not retire and stopped restartably for the host
+    // (a declined INS/OUTS iteration). Completed iterations are
+    // architectural; resuming re-executes with what remains.
+    kStopped,
     // The mnemonic decodes but this increment does not implement it. The
     // event carries kIllegalInstruction; callers inside the repository
     // (the SST runner) use the distinction to count coverage honestly.
@@ -36,6 +40,9 @@ struct StepResult
 {
     StepStatus status = StepStatus::kRetired;
     Event event;
+    // MOV SS, POP SS or an IF-enabling STI retired: no external interrupt
+    // at the next boundary.
+    bool inhibit_interrupts = false;
 };
 
 // Executes one instruction at CS:EIP.

@@ -12,6 +12,11 @@
 namespace rex86::interp
 {
 
+// EFLAGS bits POPF, IRET and SAHF-style loads may change. Reserved bit 1
+// stays set, and the system bits a user-mode core does not model (RF,
+// VM) stay off.
+inline constexpr std::uint32_t kEflagsPopWritable = 0x00007FD5u;
+
 constexpr std::uint32_t WidthMask(const unsigned width_bits)
 {
     return width_bits >= 32 ? 0xFFFFFFFFu : ((1u << width_bits) - 1u);
