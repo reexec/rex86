@@ -2,6 +2,7 @@
 
 #include "decode/decoder.h"
 #include "interp/access.h"
+#include "interp/exec.h"
 #include "interp/flags.h"
 
 namespace rex86::interp
@@ -29,15 +30,6 @@ std::uint32_t InstructionPointerMask(const CpuState& state)
 {
     return state.Seg(Segment::kCs).default_32bit ? 0xFFFFFFFFu : 0xFFFFu;
 }
-
-// What one executed instruction asks of the loop.
-enum class ExecStatus : std::uint8_t
-{
-    kContinue,
-    kStop,           // retired, event filled (HLT, INT n, port I/O)
-    kFault,          // not retired, ctx.fault filled
-    kUnimplemented,  // decoded but not in this increment
-};
 
 bool ConditionHolds(const ZydisMnemonic mnemonic, const CpuState& state)
 {
@@ -665,7 +657,7 @@ ExecStatus Execute(Ctx* ctx, std::uint32_t* next_eip, Event* stop_event)
         }
 
         default:
-            return ExecStatus::kUnimplemented;
+            return ExecuteExtended(ctx, stop_event);
     }
 }
 

@@ -22,6 +22,18 @@
   스위트의 `EA32` 기록 자체는 SDM 공식으로 계산되어 레지스터 결과와 불일치한다(업스트림 README의 "invalid SIB encodings produce incorrect effective address calculations in test output"과 부합).
 * **확인됨 — POPAD가 ESP 상위 절반을 스택 이미지에서 적재한다.** SDM은 저장된 ESP를 버린다고 하지만, 16비트 스택(SS.D=0)에서 386EX의 최종 ESP는 상위 16비트 = 이미지 값, 하위 16비트 = 증가한 SP다(`6661.MOO` 전체). **이것은 코어에 반영했다**: 스택 폭이 지배하지 않는 비트는 이미지에서 온다는 규칙은 SDM의 "버린다"와 양립 가능한 해석이고, 32비트 스택에서는 SDM 그대로 동작한다.
 
+## 2b. SDM이 미정의로 두는 곳의 386 실측값 / Measured 386 values where the SDM says undefined
+
+이 항목들은 SDM이 **미정의**로 두는 곳이라 어떤 결정적 값도 규칙 위반이 아니다. #13은 게스트 충실도를 위해 아래 실측값을 코어에 반영했다(마스크가 없어 SST 비교가 이 값을 요구하기도 한다).
+
+* **확인됨 — 시프트 count > 폭의 CF** (`D2.4/D2.5/D3.5`): 피연산자가 폭 주기로 재순환한다. count가 폭의 배수면 SHR의 CF = 부호 비트, SHL의 CF = 최하위 비트, 그 외 count > 폭은 CF = 0. (처음 세운 '32비트 복제' 가설은 (0xFE,10)→0, (0xFF,29)→0 반례로 기각.)
+* **확인됨 — 16비트 SHLD/SHRD의 count > 16** (`0FA4.MOO` 5건 수치 검증): 결과 = **소스만의 회전**(SHLD는 `ROL16(src, count−16)`, SHRD는 `ROR16(src, count−16)`), 목적지 값은 무시된다. CF는 count ≤ 16과 같은 공식(연결값에서 마지막으로 밀려난 비트)이 그대로 성립.
+* **확인됨, 미반영 — BT 계열의 OF** (`0FA3.MOO` 8건 수치 검증): OF = `ROR(dst, index)` 결과의 상위 두 비트 XOR(회전 명령의 OF 정의와 동일), SF/ZF/AF/PF는 보존. f_umask가 이 플래그들을 미정의로 가려 비교에 불요하므로 코어는 단순 보존을 유지한다.
+* **미확정 — IDIV 음수 오버플로의 비폴트 완료** (`F6.7/F7.7` 9건): 몫이 범위를 벗어나는 일부 음수 몫 케이스에서 386EX가 #DE 없이 AL=0x80, AH=(피제수 − (−128)×제수)의 하위 바이트를 쓴다(수치 2건 검증). 폴트 술어는 샘플 부족으로 미확정. 코어는 SDM대로 #DE를 유지하고 비교 하네스가 `skipped_hw_quirk`로 분리한다.
+* **확인됨 — 리그의 장주기 REP 중단**: 32비트 주소 REP에 초기 ECX가 큰 테스트는 리그가 중간에 중단한 부분 상태를 기록한다(아키텍처적으로 유효한 중간 상태). 하네스는 ECX > 0xFFFF인 a32 REP를 건너뛴다.
+
+*Where the SDM says undefined, any deterministic value is legal; #13 adopted the measured 386 values below for guest fidelity (and because unmasked comparisons require them). Confirmed: for shift counts above the width the operand recirculates with the width as period — CF is the sign bit (SHR) or the low bit (SHL) at count multiples of the width and zero otherwise (the earlier 32-bit-replication hypothesis fell to counterexamples); 16-bit SHLD/SHRD above count 16 rotate the SOURCE alone (`ROL16/ROR16(src, count−16)`, destination ignored) with the count ≤ 16 CF formula still holding; the BT family's OF equals the rotate-style OF of `ROR(dst, index)` with SF/ZF/AF/PF preserved (verified 8/8 but NOT adopted — f_umask hides those flags, so the core keeps simple preservation). Unresolved: a handful of IDIV negative-overflow cases complete without #DE, writing AL=0x80 and the remainder taken at q=−128; the fault predicate lacks samples, the core keeps the SDM's #DE and the harness skips them as `skipped_hw_quirk`. Confirmed: long a32 REP tests record the rig's mid-string interruption (a valid architectural intermediate), so the harness skips a32 REPs with ECX > 0xFFFF.*
+
 ## 3. 인코딩 해석 주의 / Encoding interpretation notes
 
 * **확인됨**: 간접 CALL/JMP 앞의 0x3E를 Zydis는 CET notrack 힌트로 해석해 `operand.mem.segment`에 반영하지 않는다. IA-32(이 코어의 게스트는 CET 이전)에서는 DS override다. 코어의 `SegmentOf`는 raw prefix를 직접 훑어 마지막 세그먼트 prefix를 적용한다(`FF.2.MOO` #87 `3E FF 13`: 하드웨어 l_addr = DS base + EA로 확인).

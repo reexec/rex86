@@ -60,6 +60,8 @@ add_library(rex86_core STATIC
     src/cpu.cpp
     src/decode/decoder.cpp
     src/interp/access.cpp
+    src/interp/exec_arith.cpp
+    src/interp/exec_strings.cpp
     src/interp/interpreter.cpp
 )
 add_library(rex86::core ALIAS rex86_core)
