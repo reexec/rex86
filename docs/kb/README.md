@@ -12,4 +12,5 @@
 
 | 문서 | 내용 |
 | --- | --- |
+| [x87.md](x87.md) | x87 FPU: 80비트 형식과 분류, 레지스터 스택과 태그, CW/SW, 예외와 우선순위, 환경 이미지 / the 80-bit format and its classes, the register stack and tags, CW/SW, exceptions and their priority, environment images |
 | [singlesteptests-moo.md](singlesteptests-moo.md) | SingleStepTests 하드웨어 생성 테스트와 MOO v1.1 바이너리 형식 / the hardware-generated SingleStepTests suites and the MOO v1.1 binary format |
