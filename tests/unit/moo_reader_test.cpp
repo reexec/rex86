@@ -14,12 +14,6 @@ using rex86::sst::ParseMooFile;
 
 // Builders that synthesize MOO v1.1 bytes per the specification, so the
 // parser is tested without the network or checked-in binary fixtures.
-void PutU16(std::vector<std::uint8_t>* out, const std::uint16_t value)
-{
-    out->push_back(static_cast<std::uint8_t>(value & 0xFF));
-    out->push_back(static_cast<std::uint8_t>(value >> 8));
-}
-
 void PutU32(std::vector<std::uint8_t>* out, const std::uint32_t value)
 {
     out->push_back(static_cast<std::uint8_t>(value & 0xFF));
