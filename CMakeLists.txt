@@ -139,6 +139,17 @@ if(REX86_BUILD_TESTS)
         target_compile_definitions(rex86_trace_format PRIVATE _CRT_SECURE_NO_WARNINGS)
     endif()
 
+    # The benchmark harness (design #27): the byte assembler, the synthetic
+    # workloads with their reference models and the frame loop, on the
+    # public contract alone so that it measures every engine the same way.
+    add_library(rex86_bench_lib STATIC
+        src/tools/bench/asm.cpp
+        src/tools/bench/workloads.cpp
+        src/tools/bench/runner.cpp
+    )
+    target_include_directories(rex86_bench_lib PUBLIC src)
+    target_link_libraries(rex86_bench_lib PUBLIC rex86::core PRIVATE rex86_warnings)
+
     add_executable(rex86_unit_tests
         tests/unit/main.cpp
         tests/unit/version_test.cpp
@@ -153,6 +164,7 @@ if(REX86_BUILD_TESTS)
         tests/unit/x87_transcendental_test.cpp
         tests/unit/post386_test.cpp
         tests/unit/trace_test.cpp
+        tests/unit/bench_test.cpp
         src/tools/census/census.cpp
         src/tools/sst/moo_reader.cpp
     )
@@ -162,7 +174,8 @@ if(REX86_BUILD_TESTS)
     # SoftFloat's include paths).
     target_include_directories(rex86_unit_tests PRIVATE src)
     target_link_libraries(rex86_unit_tests
-        PRIVATE rex86::core rex86_trace_format rex86_warnings rex86_zydis rex86_softfloat)
+        PRIVATE rex86::core rex86_trace_format rex86_bench_lib rex86_warnings
+                rex86_zydis rex86_softfloat)
 
     add_executable(rex86_probe src/tools/probe/main.cpp)
     target_link_libraries(rex86_probe PRIVATE rex86::core rex86_warnings)
@@ -174,6 +187,19 @@ if(REX86_BUILD_TESTS)
     if(EMSCRIPTEN)
         target_link_options(rex86_trace PRIVATE -sNODERAWFS=1)
     endif()
+    # rex86_bench measures on every host; --dump writes files, which under
+    # Emscripten needs the Node filesystem. $<CONFIG> is printed on its first
+    # line so that Debug and Release figures never mix.
+    add_executable(rex86_bench src/tools/bench/main.cpp)
+    target_link_libraries(rex86_bench PRIVATE rex86_bench_lib rex86_warnings)
+    target_compile_definitions(rex86_bench PRIVATE REX86_BENCH_CONFIG="$<CONFIG>")
+    if(MSVC)
+        target_compile_definitions(rex86_bench PRIVATE _CRT_SECURE_NO_WARNINGS)
+    endif()
+    if(EMSCRIPTEN)
+        target_link_options(rex86_bench PRIVATE -sNODERAWFS=1)
+    endif()
+
     file(GLOB REX86_TRACE_CORPUS CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/traces/*.rxt")
 
@@ -234,6 +260,7 @@ if(REX86_BUILD_TESTS)
     if(EMSCRIPTEN)
         add_test(NAME rex86_unit_tests COMMAND node $<TARGET_FILE:rex86_unit_tests>)
         add_test(NAME rex86_probe COMMAND node $<TARGET_FILE:rex86_probe>)
+        add_test(NAME rex86_bench_smoke COMMAND node $<TARGET_FILE:rex86_bench> --smoke)
         if(REX86_TRACE_CORPUS)
             add_test(NAME rex86_trace_corpus
                 COMMAND node $<TARGET_FILE:rex86_trace> ${REX86_TRACE_CORPUS})
@@ -241,6 +268,7 @@ if(REX86_BUILD_TESTS)
     else()
         add_test(NAME rex86_unit_tests COMMAND rex86_unit_tests)
         add_test(NAME rex86_probe COMMAND rex86_probe)
+        add_test(NAME rex86_bench_smoke COMMAND rex86_bench --smoke)
         if(REX86_TRACE_CORPUS)
             add_test(NAME rex86_trace_corpus COMMAND rex86_trace ${REX86_TRACE_CORPUS})
         endif()
