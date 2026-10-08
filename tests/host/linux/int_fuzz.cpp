@@ -21,7 +21,8 @@
 //
 // Usage: rex86_int_fuzz [iterations] [seed] [--verbose] [--stats]
 //                       [--only MNEMONIC] [--record FILE] [--failures FILE]
-// --record writes every case (the corpus), --failures the mismatches only;
+// --record writes every case but vendor deviations (the corpus), --failures
+// the mismatches only;
 // rex86_trace --dump N FILE spells a recorded case out.
 
 #if !defined(__linux__) || !defined(__i386__)
@@ -1003,6 +1004,94 @@ trace::Case BuildCase(const Input& input, const std::array<std::uint16_t, 6>& se
     return c;
 }
 
+// A known vendor deviation, counted apart (#22, follow-up of 2026-10-09):
+// when both operands of a CMPS are unreachable, the Intel Cascade Lake and
+// the AMD Zen 3 report the destination ES:(E)DI, which the core follows,
+// while the AMD EPYC 9V45 (Zen 5) of the CI reports the source DS:(E)SI.
+// It counts only when everything but the fault address matches, the host's
+// CR2 lies in the source operand and the core's address in the destination,
+// so a core reporting any other address stays a mismatch.
+bool SourceFirstCompareFault(const Input& input, const HostOutcome& host,
+                             const trace::Case& c)
+{
+    const ZydisMnemonic m = input.decoded.instruction.mnemonic;
+    unsigned width = 0;
+    if (m == ZYDIS_MNEMONIC_CMPSB) width = 1;
+    if (m == ZYDIS_MNEMONIC_CMPSW) width = 2;
+    if (m == ZYDIS_MNEMONIC_CMPSD) width = 4;
+    if (width == 0 || (c.flags & trace::kCompareFaultAddress) == 0 ||
+        c.fault_kind != static_cast<std::uint8_t>(rex86::FaultKind::kAccessViolation))
+    {
+        return false;
+    }
+    const std::uint32_t mask = input.decoded.instruction.address_width == 16 ? 0xFFFFu : 0xFFFFFFFFu;
+    // At the fault the index registers address the faulting iteration.
+    const std::uint32_t source = host.gpr[6] & mask;
+    const std::uint32_t destination = host.gpr[7] & mask;
+    // The host's address must be in the source operand and unreachable,
+    // that is outside the mapped region.
+    if (host.cr2 - source >= width || host.cr2 - kBase < kRegionSize)
+    {
+        return false;
+    }
+    trace::Case patched = c;
+    for (unsigned i = 0; i < width; ++i)
+    {
+        patched.fault_address = destination + i;
+        if (trace::Replay(patched).matched)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The second known vendor deviation (#22, follow-up of 2026-10-09): the
+// Intel Cascade Lake reads BOUND's lower bound, compares, and reads the
+// upper bound only when the index is not below it, so an index below the
+// lower bound raises #BR even when the upper bound is unreachable; the
+// core follows that order. The AMD Zen 3 reads both bounds first and takes
+// the page fault. It counts only when the core raises #BR, the host's CR2
+// lies in the upper bound and outside the mapped region, and the case
+// matches once the host's fault is read as #BR.
+bool BothBoundsReadFirst(const Input& input, const HostOutcome& host, const trace::Case& c)
+{
+    if (input.decoded.instruction.mnemonic != ZYDIS_MNEMONIC_BOUND ||
+        c.fault_kind != static_cast<std::uint8_t>(rex86::FaultKind::kAccessViolation))
+    {
+        return false;
+    }
+    const ZydisDecodedOperand* memory = nullptr;
+    for (ZyanU8 i = 0; i < input.decoded.instruction.operand_count; ++i)
+    {
+        if (IsMemory(input.decoded.operands[i]))
+        {
+            memory = &input.decoded.operands[i];
+        }
+    }
+    if (memory == nullptr)
+    {
+        return false;
+    }
+    const std::uint32_t width = input.decoded.operands[0].size / 8u;
+    const std::uint32_t upper = Address(input, *memory) + width;
+    if (host.cr2 - upper >= width || host.cr2 - kBase < kRegionSize)
+    {
+        return false;
+    }
+    trace::Case patched = c;
+    patched.fault_kind = static_cast<std::uint8_t>(rex86::FaultKind::kBound);
+    patched.flags &= ~trace::kCompareFaultAddress;
+    patched.fault_address = 0;
+    return trace::Replay(patched).matched;
+}
+
+// The vendor deviations the fuzz counts apart from mismatches.
+bool VendorDeviation(const Input& input, const HostOutcome& host, const trace::Case& c)
+{
+    return SourceFirstCompareFault(input, host, c) || BothBoundsReadFirst(input, host, c);
+}
+
 std::string Hex(const std::vector<std::uint8_t>& bytes)
 {
     std::string text;
@@ -1090,6 +1179,7 @@ int main(int argc, char** argv)
     // Per mnemonic: cases retired, cases faulted.
     std::map<std::string, std::pair<std::uint64_t, std::uint64_t>> coverage;
     std::uint64_t mismatches = 0;
+    std::uint64_t vendor_deviations = 0;
     std::uint64_t retired = 0;
     for (std::uint64_t n = 0; n < iterations; ++n)
     {
@@ -1113,13 +1203,21 @@ int main(int argc, char** argv)
             ++retired;
             ++covered.first;
         }
-        if (!record_path.empty())
+        const trace::ReplayResult result = trace::Replay(c);
+        const bool deviation = !result.matched && VendorDeviation(input, outcome, c);
+        // Vendor deviations stay out of the corpus: its expectations must
+        // be what the core produces on every host.
+        if (!record_path.empty() && !deviation)
         {
             record.Add(c);
         }
-        const trace::ReplayResult result = trace::Replay(c);
         if (result.matched)
         {
+            continue;
+        }
+        if (deviation)
+        {
+            ++vendor_deviations;
             continue;
         }
         ++mismatches;
@@ -1143,9 +1241,11 @@ int main(int argc, char** argv)
     if (!record_path.empty()) record.Close();
     if (!failures_path.empty()) failures.Close();
 
-    std::printf("forms=%zu iterations=%llu seed=%llu mismatches=%llu retired=%llu rejected=%llu\n",
+    std::printf("forms=%zu iterations=%llu seed=%llu mismatches=%llu vendor_deviations=%llu "
+                "retired=%llu rejected=%llu\n",
                 forms.size(), static_cast<unsigned long long>(iterations),
                 static_cast<unsigned long long>(seed), static_cast<unsigned long long>(mismatches),
+                static_cast<unsigned long long>(vendor_deviations),
                 static_cast<unsigned long long>(retired),
                 static_cast<unsigned long long>(generator.rejected()));
     std::printf("faults:");

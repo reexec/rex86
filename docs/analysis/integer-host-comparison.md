@@ -26,8 +26,8 @@ i386 프로세스가 0x10000에 코드 페이지, 8 KiB 작업 영역, 8 KiB 보
 | 페이지 경계를 넘는 접근의 폴트 주소 | 처음 닿지 못하는 바이트(CR2). dword가 0x12FFE에서 비매핑 0x13000으로 넘어가면 0x13000 | 확인됨. 코어의 `Event::fault_address`가 이 값을 보고한다 |
 | ENTER의 최종 ESP 검사 | 프레임 push가 메모리에 남은 뒤, 최종 ESP(ESP − 할당 크기)에 쓰기를 시험해 #PF를 낸다. 폴트 주소는 최종 ESP | 확인됨. SDM ENTER의 #PF 조건("a write using the final value of the stack pointer") |
 | ENTER의 display 복사 | (E)BP를 **스택 크기**(SS.B)로 줄여 가며 읽는다. 66 prefix의 16비트 ENTER도 32비트 스택에서는 EBP 전체를 쓴다 | 확인됨. SDM ENTER 의사 코드("IF StackSize = 32 … EBP ← EBP − 2") |
-| CMPS의 읽기 순서 | ES:(E)DI를 먼저 읽는다. 양쪽이 모두 폴트 나는 주소면 목적지 쪽이 보고된다 | 확인됨. SDM은 순서를 적지 않는다. 386EX SST와도 충돌 없음 |
-| BOUND의 검사 순서 | 두 경계의 세그먼트 limit을 먼저 검사하고(386EX SST), 하한을 읽어 비교한 다음에 상한을 읽는다. 첨자가 하한보다 작으면 상한이 폴트 날 페이지에 있어도 #BR | 확인됨(Intel)과 SST(386EX)를 함께 만족하는 순서 |
+| CMPS의 읽기 순서 | ES:(E)DI를 먼저 읽는다. 양쪽이 모두 폴트 나는 주소면 목적지 쪽이 보고된다 | 확인됨(Intel Cascade Lake, AMD Zen 3). SDM은 순서를 적지 않는다. 386EX SST와도 충돌 없음. AMD Zen 5는 원본 쪽을 보고한다(4절, 제조사 이탈) |
+| BOUND의 검사 순서 | 두 경계의 세그먼트 limit을 먼저 검사하고(386EX SST), 하한을 읽어 비교한 다음에 상한을 읽는다. 첨자가 하한보다 작으면 상한이 폴트 날 페이지에 있어도 #BR | 확인됨(Intel)과 SST(386EX)를 함께 만족하는 순서. AMD Zen 3은 두 경계를 먼저 읽는다(4절 앞, 제조사 이탈) |
 | XADD [m], r의 주소 | 원본 레지스터가 주소의 일부여도(XADD [ecx], ch) 주소는 한 번만 계산된다 | 확인됨. 코어의 구현 오류였다(레지스터를 먼저 써서 주소가 바뀌었음) |
 | PAUSE(F3 90) | NOP | 확인됨. Pentium 4 이전에는 REP NOP |
 
@@ -43,9 +43,25 @@ SDM이 미정의로 두는 것과 호스트의 인공물은 비교에서 뺀다(
 
 *What the SDM leaves undefined and the host's artifacts are masked (design decision 4, listed above), plus one more: **confirmed, a generation difference: the flags of a REP CMPS/SCAS faulting mid-way.** After some iterations, ECX, ESI and EDI have advanced through the completed ones on both sides, but EFLAGS reads **as the instruction started** on the Intel Cascade Lake and **as the last completed iteration left it** on the 386EX (SST). The SDM does not say, and a re-executed instruction recomputes the flags in its first iteration, so ordinary guests cannot tell. The core keeps the SST-verified 386EX behavior and the fuzz masks the arithmetic flags of such faults.*
 
+### 제조사 이탈: Zen 5의 CMPS 폴트 주소 / Vendor deviation: Zen 5's CMPS fault address
+
+* **확인됨(CI 관측, 2026-10-09, #27 PR의 CI): CMPS의 두 피연산자가 모두 닿을 수 없을 때 AMD EPYC 9V45(Zen 5)는 원본 DS:(E)SI 쪽 주소를 보고한다.** 시드 1의 5만 건에서 CMPSB/W/D 4건이 폴트 주소만 달랐다. 같은 시드가 AMD Ryzen 5 5600X(Zen 3)의 i386 프로세스에서는 불일치 0이므로, Zen 3과 Intel Cascade Lake는 목적지 쪽을 보고한다. SDM은 순서를 적지 않는다.
+* 코어는 목적지 쪽을 유지한다(Intel, Zen 3, 386EX SST와 같다). fuzz는 이 경우를 `vendor_deviations`로 따로 세고 trace에 기록하지 않는다. 판정 조건은 좁다: 폴트 주소만 빼면 전부 일치하고, 호스트의 CR2가 원본 피연산자 범위 안이면서 매핑 밖이고, 코어의 주소가 목적지 피연산자 범위 안일 때만이다. 코어가 다른 주소를 내면 여전히 불일치다.
+* **추정**: Zen 5가 원본을 먼저 읽는 것이 모든 CMPS 형태(REP, 16비트 주소)에 같다는 것. 관측 4건이 판정 조건을 만족하는지는 다음 Zen 5 CI 실행에서 `vendor_deviations`로 확인한다. 이 기계에서는 호스트 결과를 원본 주소로 바꾼 시뮬레이션으로 판정 경로를 시험했다(작업 로그).
+
+*Confirmed (CI observation, 2026-10-09, on #27's PR): with both CMPS operands unreachable, the AMD EPYC 9V45 (Zen 5) reports the source DS:(E)SI address. Seed 1's 50,000 cases gave 4 CMPSB/W/D cases differing in the fault address alone; the same seed has zero mismatches in an i386 process on an AMD Ryzen 5 5600X (Zen 3), so Zen 3 and the Intel Cascade Lake report the destination. The SDM does not say. The core keeps the destination (as Intel, Zen 3 and the 386EX SST), and the fuzz counts the case under `vendor_deviations` and keeps it out of the corpus, under narrow conditions: everything but the fault address matches, the host's CR2 lies in the source operand and outside the mapping, and the core's address lies in the destination operand; any other core address stays a mismatch. Inferred: that Zen 5 reads the source first in every CMPS form (REP, 16-bit addressing); the next Zen 5 CI run confirms through `vendor_deviations` that the observed cases meet the conditions. Here, the judgment was exercised by a simulation that rewrote the host's result to the source address (work log).*
+
+### 제조사 이탈: Zen 3의 BOUND 읽기 순서 / Vendor deviation: Zen 3's BOUND read order
+
+* **확인됨(2026-10-09, AMD Ryzen 5 5600X, Zen 3, i386 프로세스): BOUND는 비교 전에 두 경계를 모두 읽는다.** 첨자가 하한보다 작고 상한이 닿을 수 없는 페이지(가드 0x13000)에 있으면, Intel Cascade Lake와 코어는 #BR을, Zen 3은 상한 주소의 페이지 폴트를 낸다. 250만 건(시드 1, 101~104 × 50만)에서 32건이다. 지금까지 AMD 긴 실행이 없어 드러나지 않았다.
+* 코어는 Intel의 순서를 유지한다(SST 386EX와도 맞는다). fuzz는 코어가 #BR을 내고, 호스트의 CR2가 상한 피연산자 안이면서 매핑 밖이고, 호스트의 폴트를 #BR로 읽으면 나머지가 모두 일치할 때만 `vendor_deviations`로 센다.
+* 같은 실행에서 CMPS 이탈은 0건이었다. 그러므로 Zen 3은 CMPS에서 Intel과 같고, BOUND에서 다르다.
+
+*Confirmed (2026-10-09, AMD Ryzen 5 5600X, Zen 3, i386 process): BOUND reads both bounds before comparing. With the index below the lower bound and the upper bound on an unreachable page (the guard at 0x13000), the Intel Cascade Lake and the core raise #BR while Zen 3 page-faults at the upper bound; 32 cases in 2.5M (seeds 1 and 101-104 × 500,000), unseen before for lack of a long AMD run. The core keeps Intel's order (consistent with the 386EX SST); the fuzz counts the case under `vendor_deviations` only when the core raises #BR, the host's CR2 lies in the upper bound and outside the mapping, and the case matches once the host's fault reads as #BR. The same runs had no CMPS deviation: Zen 3 agrees with Intel on CMPS and differs on BOUND.*
+
 ## 4. 미확정 / Unresolved
 
-* AMD 호스트의 긴 실행과 P6 세대 실물에서의 위 모든 항목. 확인 방법: 그 호스트의 i386 프로세스에서 `rex86_int_fuzz`를 긴 시드로 실행한다(가이드).
+* AMD Zen 5의 긴 실행(CI는 5만 건뿐)과 P6 세대 실물에서의 위 모든 항목. Zen 3은 2026-10-09에 250만 건을 돌렸다. 확인 방법: 그 호스트의 i386 프로세스에서 `rex86_int_fuzz`를 긴 시드로 실행한다(가이드).
 * 문자열이 아닌 명령에 붙은 F2/F3: SDM은 이 사용을 예약으로 두고 "예측할 수 없는 동작"을 허용한다(Vol. 2, 2.1.1). 실제로 F3 LOOPNE의 분기 여부가 AMD EPYC 7763(CI, 7건)과 Intel 호스트, 코어 사이에서 갈렸다. 생성기는 이 조합을 만들지 않는다(PAUSE, F3 90만 예외).
 * 환경과 권한에 묶여 뺀 명령(세그먼트 적재, far 제어 흐름, IRET, 포트 I/O, INT n, 특권 명령): 보호 모드 의미가 호스트 OS의 GDT/LDT에 묶인다. 실모드 의미는 SST가 검증한다.
 * 16비트 주소(67 prefix)의 메모리 접근은 호스트에서 늘 0x10000 아래의 비매핑 주소라 폴트 경로만 비교된다. 16비트 주소의 성공 경로는 SST가 검증한다.
