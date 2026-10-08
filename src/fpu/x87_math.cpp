@@ -2,12 +2,7 @@
 
 #include <utility>
 
-// SoftFloat's headers expect platform.h first, as its own sources do.
-extern "C" {
-#include "platform.h"
-#include "softfloat.h"
-#include "internals.h"
-}
+#include "fpu/softfloat_bridge.h"
 
 namespace rex86::fpu
 {
@@ -15,119 +10,16 @@ namespace rex86::fpu
 namespace
 {
 
-// SoftFloat's operand. A pseudo-denormal (exponent 0, J = 1) has the
-// value of the same significand at exponent 1, and SoftFloat mishandles
-// it as given (an addition loses the carry out of the significand), so it
-// is passed in that canonical form.
-extFloat80_t ToSoft(const Float80& value)
-{
-    extFloat80_t soft;
-    soft.signif = value.significand;
-    soft.signExp = value.sign_exponent;
-    if (value.Exponent() == 0 && value.IntegerBit())
-    {
-        soft.signExp = static_cast<std::uint16_t>(soft.signExp | 1u);
-    }
-    return soft;
-}
-
-Float80 FromSoft(const extFloat80_t& soft)
-{
-    return Float80{soft.signif, soft.signExp};
-}
-
-std::uint_fast8_t SoftRounding(const unsigned rounding_control)
-{
-    switch (rounding_control)
-    {
-        case 1: return softfloat_round_min;
-        case 2: return softfloat_round_max;
-        case 3: return softfloat_round_minMag;
-        case 0:
-        default: return softfloat_round_near_even;
-    }
-}
-
-// CW.PC: 00 single (24 bits), 10 double (53), 11 extended (64). The
-// reserved 01 behaves as extended.
-std::uint_fast8_t SoftPrecision(const std::uint16_t control_word)
-{
-    switch ((control_word >> 8) & 3u)
-    {
-        case 0: return 32;
-        case 2: return 64;
-        default: return 80;
-    }
-}
-
-std::uint16_t FromSoftFlags(const std::uint_fast8_t flags)
-{
-    std::uint16_t raised = 0;
-    if ((flags & softfloat_flag_invalid) != 0) raised |= kInvalid;
-    if ((flags & softfloat_flag_infinite) != 0) raised |= kZeroDivide;
-    if ((flags & softfloat_flag_overflow) != 0) raised |= kOverflow;
-    if ((flags & softfloat_flag_underflow) != 0) raised |= kUnderflow;
-    if ((flags & softfloat_flag_inexact) != 0) raised |= kPrecision;
-    return raised;
-}
-
-// Sets SoftFloat's globals for one call and collects its flags.
-class SoftScope
-{
-public:
-    SoftScope(const unsigned rounding_control, const std::uint_fast8_t precision)
-    {
-        softfloat_roundingMode = SoftRounding(rounding_control);
-        extF80_roundingPrecision = precision;
-        softfloat_detectTininess = softfloat_tininess_afterRounding;
-        softfloat_exceptionFlags = 0;
-    }
-
-    [[nodiscard]] std::uint16_t Raised() const
-    {
-        return FromSoftFlags(softfloat_exceptionFlags);
-    }
-};
-
-// |a| > |b| for canonical values (no unnormals): the exponent then the
-// significand order the magnitudes.
-bool MagnitudeGreater(const Float80& a, const Float80& b)
-{
-    if (a.Exponent() != b.Exponent())
-    {
-        return a.Exponent() > b.Exponent();
-    }
-    return a.significand > b.significand;
-}
-
-// A finite nonzero value as an exact (unbiased exponent, significand with
-// J set) pair; denormals and pseudo-denormals normalized.
-struct Unpacked
-{
-    bool sign = false;
-    std::int32_t exponent = 0;  // value = significand * 2^(exponent - 63)
-    std::uint64_t significand = 0;
-};
-
-Unpacked Unpack(const Float80& value)
-{
-    Unpacked out;
-    out.sign = value.Sign();
-    std::int32_t exponent = value.Exponent();
-    std::uint64_t significand = value.significand;
-    if (exponent == 0)
-    {
-        exponent = 1;  // denormals and pseudo-denormals share emin
-    }
-    while ((significand >> 63) == 0)
-    {
-        significand <<= 1;
-        --exponent;
-    }
-    out.exponent = exponent - kExponentBias;
-    out.significand = significand;
-    return out;
-}
+using detail::CheckOperands;
+using detail::FromSoft;
+using detail::MagnitudeGreater;
+using detail::Precheck;
+using detail::SoftPrecision;
+using detail::SoftRounding;
+using detail::SoftScope;
+using detail::ToSoft;
+using detail::Unpack;
+using detail::Unpacked;
 
 // Multiplies a finite value by 2^k exactly where the result stays normal.
 // Below the normal range the result becomes the smallest denormal of the
@@ -150,55 +42,6 @@ Float80 ScaleForAdjustedResult(const Float80& value, const std::int32_t k)
                    static_cast<std::uint16_t>((u.sign ? 0x8000u : 0u) |
                                               static_cast<std::uint32_t>(
                                                   biased))};
-}
-
-// The pre-computation checks every arithmetic operation shares: invalid
-// operands (unsupported encodings, signaling NaNs) and denormals.
-enum class Precheck : std::uint8_t
-{
-    kProceed,     // compute normally
-    kNaNResult,   // a NaN operand decides the result; SoftFloat propagates
-    kDone,        // *result already set (masked invalid response)
-    kSuppressed,  // unmasked exception: nothing is written
-};
-
-Precheck CheckOperands(Status* status, const Float80& a, const Float80* b,
-                       Float80* result, const OperandHints hints = {})
-{
-    const Kind ka = Classify(a);
-    const Kind kb = b != nullptr ? Classify(*b) : Kind::kNormal;
-    if (ka == Kind::kUnsupported || kb == Kind::kUnsupported)
-    {
-        status->raised |= kInvalid;
-        if (status->Unmasked(kInvalid))
-        {
-            return Precheck::kSuppressed;
-        }
-        *result = kIndefinite;
-        return Precheck::kDone;
-    }
-    if (IsNaN(ka) || IsNaN(kb))
-    {
-        if (ka == Kind::kSignalingNaN || kb == Kind::kSignalingNaN)
-        {
-            status->raised |= kInvalid;
-            if (status->Unmasked(kInvalid))
-            {
-                return Precheck::kSuppressed;
-            }
-        }
-        return Precheck::kNaNResult;
-    }
-    if (ka == Kind::kDenormal || kb == Kind::kDenormal || hints.a_denormal ||
-        hints.b_denormal)
-    {
-        status->raised |= kDenormalOperand;
-        if (status->Unmasked(kDenormalOperand))
-        {
-            return Precheck::kSuppressed;
-        }
-    }
-    return Precheck::kProceed;
 }
 
 extFloat80_t SoftArith(const Arithmetic op, const extFloat80_t a,

@@ -94,7 +94,11 @@ add_library(rex86_core STATIC
     src/cpu.cpp
     src/decode/decoder.cpp
     src/fpu/float80.cpp
+    src/fpu/softfloat_bridge.cpp
+    src/fpu/transcendental_kernels.cpp
+    src/fpu/wide_float.cpp
     src/fpu/x87_math.cpp
+    src/fpu/x87_transcendental.cpp
     src/interp/access.cpp
     src/interp/exec_arith.cpp
     src/interp/exec_bcd.cpp
@@ -103,6 +107,7 @@ add_library(rex86_core STATIC
     src/interp/exec_strings.cpp
     src/interp/exec_x87.cpp
     src/interp/exec_x87_env.cpp
+    src/interp/exec_x87_transcendental.cpp
     src/interp/x87_access.cpp
     src/interp/x87_stack.cpp
     src/interp/interpreter.cpp
@@ -145,16 +150,19 @@ if(REX86_BUILD_TESTS)
         tests/unit/moo_reader_test.cpp
         tests/unit/interp_test.cpp
         tests/unit/x87_test.cpp
+        tests/unit/x87_transcendental_test.cpp
         tests/unit/post386_test.cpp
         tests/unit/trace_test.cpp
         src/tools/census/census.cpp
         src/tools/sst/moo_reader.cpp
     )
-    # The decoder and census tests include internal headers under src/,
-    # which is deliberate: the public contract does not expose the decoder.
+    # The decoder, census and x87 transcendental tests include internal
+    # headers under src/, which is deliberate: the public contract exposes
+    # neither the decoder nor the numeric kernels (whose headers need
+    # SoftFloat's include paths).
     target_include_directories(rex86_unit_tests PRIVATE src)
     target_link_libraries(rex86_unit_tests
-        PRIVATE rex86::core rex86_trace_format rex86_warnings rex86_zydis)
+        PRIVATE rex86::core rex86_trace_format rex86_warnings rex86_zydis rex86_softfloat)
 
     add_executable(rex86_probe src/tools/probe/main.cpp)
     target_link_libraries(rex86_probe PRIVATE rex86::core rex86_warnings)

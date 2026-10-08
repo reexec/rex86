@@ -280,8 +280,8 @@ void RunInterpTests(rex86::test::Context& context)
     {
         // An instruction outside the implemented increments reports
         // kIllegalInstruction rather than quietly doing nothing: here
-        // FSIN (an x87 transcendental, increment 2).
-        Machine m({0xD9, 0xFE,  // fsin
+        // EMMS (MMX, phase 1b).
+        Machine m({0x0F, 0x77,  // emms
                    0xF4});
         const rex86::Event event = m.cpu.Run(100);
         REX86_CHECK(context, event.reason == StopReason::kFault);

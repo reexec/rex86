@@ -15,6 +15,7 @@ int main()
     RunMooReaderTests(context);
     RunInterpTests(context);
     RunX87Tests(context);
+    RunX87TranscendentalTests(context);
     RunPost386Tests(context);
     RunTraceTests(context);
 

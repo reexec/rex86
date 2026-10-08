@@ -31,23 +31,8 @@ unsigned RegisterIndex(const decode::DecodedInstruction& d)
     return d.instruction.raw.modrm.rm;
 }
 
-// The x87's stack-fault response (SDM 8.5.1.1): #IS with C1 = 1 for an
-// overflow, 0 for an underflow. Returns true when the fault is masked and
-// the instruction goes on with the indefinite.
-bool StackFault(X87State* x87, const bool overflow)
-{
-    x87::SetConditions(x87, kC1, overflow ? kC1 : 0);
-    x87::Raise(x87, fpu::kInvalid | fpu::kStackFault);
-    return (x87->control_word & fpu::kInvalid) != 0;
-}
-
-// Folds one operation's status into SW. C1 reports the rounding
-// direction of a written inexact result and is cleared otherwise.
-void Commit(X87State* x87, const fpu::Status& status, const bool written)
-{
-    x87::SetConditions(x87, kC1, written && status.round_up ? kC1 : 0);
-    x87::Raise(x87, status.raised);
-}
+using x87::Commit;
+using x87::StackFault;
 
 // A memory source operand (FLD, arithmetic, compare): fetched first, so a
 // memory fault comes before anything else, and converted only after the
@@ -941,8 +926,13 @@ ExecStatus ExecuteX87(Ctx* ctx)
         case ZYDIS_MNEMONIC_FNOP:
             status = ExecStatus::kContinue;
             break;
+        case ZYDIS_MNEMONIC_FSIN: case ZYDIS_MNEMONIC_FCOS:
+        case ZYDIS_MNEMONIC_FSINCOS: case ZYDIS_MNEMONIC_FPTAN:
+        case ZYDIS_MNEMONIC_FPATAN: case ZYDIS_MNEMONIC_F2XM1:
+        case ZYDIS_MNEMONIC_FYL2X: case ZYDIS_MNEMONIC_FYL2XP1:
+            status = ExecuteX87Transcendental(ctx);
+            break;
         default:
-            // The transcendentals (increment 2) and anything else.
             status = ExecStatus::kUnimplemented;
             break;
     }
