@@ -102,6 +102,11 @@ struct Descriptor
 struct Features
 {
     bool x87 = true;
+    // CPUID.01H:EDX.CMOV: CMOVcc and, with x87 on, FCOMI/FCOMIP/FUCOMI/
+    // FUCOMIP and FCMOVcc. Every target board's CPU has them but the AMD
+    // K6-2 (EZ2DJ generation 1), which a consumer emulates by turning this
+    // off (design #21, decision 2).
+    bool cmov = true;
     bool mmx = false;
     bool sse = false;
     bool sse2 = false;

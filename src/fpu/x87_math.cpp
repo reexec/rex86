@@ -553,6 +553,21 @@ Float80 PackScaled(Status* status, const bool sign, const std::int32_t exponent,
     return v;
 }
 
+// The operand returned as the result (x rem inf, FSCALE by 0, the SDM
+// tables' "ST(0)"): in canonical form (a pseudo-denormal at exponent 1),
+// and an exact denormal raises no underflow even with #U unmasked
+// (measured on an Intel Cascade Lake, #22). The AMD Zen 3 raises #U with
+// the bias-adjusted value instead; the x87 fuzz counts that apart.
+Float80 PassThrough(Status* status, const Float80& value)
+{
+    Status quiet(static_cast<std::uint16_t>(status->control_word | kUnderflow));
+    const Unpacked u = Unpack(value);
+    const Float80 packed = PackScaled(&quiet, u.sign, u.exponent, u.significand, 0);
+    status->raised |= quiet.raised;
+    status->round_up = quiet.round_up;
+    return packed;
+}
+
 }  // namespace
 
 bool Scale(Status* status, const Float80& st0, const Float80& st1,
@@ -621,6 +636,11 @@ bool Scale(Status* status, const Float80& st0, const Float80& st1,
         {
             n = -n;
         }
+    }
+    if (n == 0)
+    {
+        *result = PassThrough(status, st0);
+        return true;
     }
     const Unpacked u0 = Unpack(st0);
     *result = PackScaled(status, u0.sign, u0.exponent + n, u0.significand, 0);
@@ -791,11 +811,7 @@ bool Remainder(Status* status, const bool ieee, const Float80& dividend,
     }
     if (kb == Kind::kInfinity)
     {
-        // The dividend comes back as a result: in canonical form (a
-        // pseudo-denormal at exponent 1) and, when it is denormal, with
-        // the underflow response (measured, #19).
-        const Unpacked u = Unpack(dividend);
-        *result = PackScaled(status, u.sign, u.exponent, u.significand, 0);
+        *result = PassThrough(status, dividend);
         return true;
     }
 

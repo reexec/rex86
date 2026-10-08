@@ -22,6 +22,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # pulling rex86 in through FetchContent gets the library alone unless it asks.
 option(REX86_BUILD_TESTS "Build the unit tests and the probe" ${PROJECT_IS_TOP_LEVEL})
 option(REX86_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+# Sanitizers for rex86's own targets (design #22, decision 7), for example
+# "address,undefined". third_party stays uninstrumented, as upstream wrote it.
+set(REX86_SANITIZE "" CACHE STRING "Comma-separated -fsanitize= list for rex86 targets")
 
 if(PROJECT_IS_TOP_LEVEL)
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
@@ -37,6 +40,11 @@ else()
     target_compile_options(rex86_warnings INTERFACE -Wall -Wextra -Wpedantic)
     if(REX86_WARNINGS_AS_ERRORS)
         target_compile_options(rex86_warnings INTERFACE -Werror)
+    endif()
+    if(REX86_SANITIZE)
+        target_compile_options(rex86_warnings INTERFACE
+            -fsanitize=${REX86_SANITIZE} -fno-sanitize-recover=all -fno-omit-frame-pointer)
+        target_link_options(rex86_warnings INTERFACE -fsanitize=${REX86_SANITIZE})
     endif()
 endif()
 
@@ -90,6 +98,7 @@ add_library(rex86_core STATIC
     src/interp/access.cpp
     src/interp/exec_arith.cpp
     src/interp/exec_bcd.cpp
+    src/interp/exec_post386.cpp
     src/interp/exec_segments.cpp
     src/interp/exec_strings.cpp
     src/interp/exec_x87.cpp
@@ -110,6 +119,21 @@ if(REX86_BUILD_TESTS)
     include(CTest)
     enable_testing()
 
+    # The trace format and replay (design #22, decision 5): outside the
+    # core, on the public contract alone, so it builds on every host.
+    add_library(rex86_trace_format STATIC
+        src/trace/trace_format.cpp
+        src/trace/replay.cpp
+    )
+    target_include_directories(rex86_trace_format PUBLIC src)
+    target_link_libraries(rex86_trace_format
+        PUBLIC rex86::core PRIVATE rex86_warnings)
+    if(MSVC)
+        # std::fopen is the portable C++ API; MSVC's C4996 would steer it
+        # to the non-standard fopen_s.
+        target_compile_definitions(rex86_trace_format PRIVATE _CRT_SECURE_NO_WARNINGS)
+    endif()
+
     add_executable(rex86_unit_tests
         tests/unit/main.cpp
         tests/unit/version_test.cpp
@@ -121,6 +145,8 @@ if(REX86_BUILD_TESTS)
         tests/unit/moo_reader_test.cpp
         tests/unit/interp_test.cpp
         tests/unit/x87_test.cpp
+        tests/unit/post386_test.cpp
+        tests/unit/trace_test.cpp
         src/tools/census/census.cpp
         src/tools/sst/moo_reader.cpp
     )
@@ -128,10 +154,20 @@ if(REX86_BUILD_TESTS)
     # which is deliberate: the public contract does not expose the decoder.
     target_include_directories(rex86_unit_tests PRIVATE src)
     target_link_libraries(rex86_unit_tests
-        PRIVATE rex86::core rex86_warnings rex86_zydis)
+        PRIVATE rex86::core rex86_trace_format rex86_warnings rex86_zydis)
 
     add_executable(rex86_probe src/tools/probe/main.cpp)
     target_link_libraries(rex86_probe PRIVATE rex86::core rex86_warnings)
+
+    # The trace replay tool and the committed corpus, replayed on every
+    # host (design #22, decision 5).
+    add_executable(rex86_trace src/tools/trace/main.cpp)
+    target_link_libraries(rex86_trace PRIVATE rex86_trace_format rex86_warnings)
+    if(EMSCRIPTEN)
+        target_link_options(rex86_trace PRIVATE -sNODERAWFS=1)
+    endif()
+    file(GLOB REX86_TRACE_CORPUS CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/traces/*.rxt")
 
     # The census tool reads dump files off the host filesystem, and
     # measurement happens on native hosts, so it is not built under
@@ -171,8 +207,18 @@ if(REX86_BUILD_TESTS)
         add_executable(rex86_x87_fuzz tests/host/linux/x87_fuzz.cpp)
         target_include_directories(rex86_x87_fuzz PRIVATE src)
         target_link_libraries(rex86_x87_fuzz
-            PRIVATE rex86::core rex86_warnings rex86_zydis)
+            PRIVATE rex86::core rex86_trace_format rex86_warnings rex86_zydis)
         add_test(NAME rex86_x87_fuzz COMMAND rex86_x87_fuzz 20000 1)
+
+        # The integer comparison (design #22, decisions 1 to 4) executes
+        # 32-bit encodings natively, so it needs an i386 process.
+        if(CMAKE_SIZEOF_VOID_P EQUAL 4)
+            add_executable(rex86_int_fuzz tests/host/linux/int_fuzz.cpp)
+            target_include_directories(rex86_int_fuzz PRIVATE src)
+            target_link_libraries(rex86_int_fuzz
+                PRIVATE rex86::core rex86_trace_format rex86_warnings rex86_zydis)
+            add_test(NAME rex86_int_fuzz COMMAND rex86_int_fuzz 50000 1)
+        endif()
     endif()
 
     # Under Emscripten an executable is a .js loader plus a .wasm module, and
@@ -180,8 +226,15 @@ if(REX86_BUILD_TESTS)
     if(EMSCRIPTEN)
         add_test(NAME rex86_unit_tests COMMAND node $<TARGET_FILE:rex86_unit_tests>)
         add_test(NAME rex86_probe COMMAND node $<TARGET_FILE:rex86_probe>)
+        if(REX86_TRACE_CORPUS)
+            add_test(NAME rex86_trace_corpus
+                COMMAND node $<TARGET_FILE:rex86_trace> ${REX86_TRACE_CORPUS})
+        endif()
     else()
         add_test(NAME rex86_unit_tests COMMAND rex86_unit_tests)
         add_test(NAME rex86_probe COMMAND rex86_probe)
+        if(REX86_TRACE_CORPUS)
+            add_test(NAME rex86_trace_corpus COMMAND rex86_trace ${REX86_TRACE_CORPUS})
+        endif()
     endif()
 endif()

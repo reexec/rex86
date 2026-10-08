@@ -185,7 +185,10 @@ void RunX87Tests(rex86::test::Context& context)
         REX86_CHECK_EQ(context, m.Dword(Machine::kData + 28), 0x2168C235u);
         REX86_CHECK_EQ(context, m.Dword(Machine::kData + 32), 0xC90FDAA2u);
         REX86_CHECK_EQ(context, m.Word(Machine::kData + 36), std::uint16_t{0x4000});
-        REX86_CHECK(context, GetDouble(m, Machine::kData + 0x70) == 3.141592653589793);
+        // The bit pattern, not a double compare: an i386 build evaluates
+        // the literal in x87 extended precision (FLT_EVAL_METHOD 2).
+        REX86_CHECK_EQ(context, m.Dword(Machine::kData + 0x70), 0x54442D18u);
+        REX86_CHECK_EQ(context, m.Dword(Machine::kData + 0x74), 0x400921FBu);
     }
     {
         // A store that faults leaves the x87 untouched: FSTP to an

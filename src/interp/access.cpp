@@ -182,6 +182,16 @@ bool Linearize(Ctx* ctx, const Segment segment, const std::uint32_t offset,
 {
     const SegmentRegister& seg = ctx->state.Seg(segment);
     const std::uint32_t bytes = width_bits / 8u;
+    // A store through a read-only segment (a code segment, typically
+    // reached with a CS override) is #GP, flat or not (SDM 5.5). Only a
+    // loadable SS can be writable, so SS never takes this path.
+    if (on_write && !seg.writable)
+    {
+        ctx->Fault(segment == Segment::kSs ? FaultKind::kStackFault
+                                           : FaultKind::kGeneralProtection,
+                   offset, on_write);
+        return false;
+    }
     if (!seg.IsFlat())
     {
         if (!seg.present || offset > seg.limit ||
@@ -199,7 +209,80 @@ bool Linearize(Ctx* ctx, const Segment segment, const std::uint32_t offset,
     return true;
 }
 
+// The address a hardware page fault reports in CR2 for an access that
+// does not fit: the first byte that cannot be reached, which is the next
+// page's first byte when an access straddles into an unmapped page.
+std::uint32_t FirstInaccessible(const GuestMemory& memory,
+                                const std::uint32_t linear,
+                                const std::uint32_t bytes, const bool on_write)
+{
+    const PageFlag wanted = PageFlag::kMapped |
+        (on_write ? PageFlag::kWrite : PageFlag::kRead);
+    for (std::uint32_t i = 0; i < bytes; ++i)
+    {
+        const std::uint32_t address = linear + i;
+        if (!memory.Contains(address, 1) ||
+            !Has(memory.pages().Get(address), wanted))
+        {
+            return address;
+        }
+    }
+    return linear;
+}
+
 }  // namespace
+
+bool CheckSegment(Ctx* ctx, const Segment segment, const std::uint32_t offset,
+                  const unsigned width_bits)
+{
+    if (ctx->faulted)
+    {
+        return false;
+    }
+    std::uint32_t linear = 0;
+    return Linearize(ctx, segment, offset, width_bits, false, &linear);
+}
+
+bool RequireWritable(Ctx* ctx, const Segment segment,
+                     const std::uint32_t offset)
+{
+    if (ctx->faulted)
+    {
+        return false;
+    }
+    if (!ctx->state.Seg(segment).writable)
+    {
+        ctx->Fault(segment == Segment::kSs ? FaultKind::kStackFault
+                                           : FaultKind::kGeneralProtection,
+                   offset, true);
+        return false;
+    }
+    return true;
+}
+
+bool ProbeWrite(Ctx* ctx, const Segment segment, const std::uint32_t offset,
+                const unsigned width_bits)
+{
+    if (ctx->faulted)
+    {
+        return false;
+    }
+    std::uint32_t linear = 0;
+    if (!Linearize(ctx, segment, offset, width_bits, true, &linear))
+    {
+        return false;
+    }
+    const std::uint32_t bytes = width_bits / 8u;
+    if (!ctx->memory.Contains(linear, bytes) ||
+        !ctx->memory.pages().AllHave(linear, bytes,
+                                     PageFlag::kMapped | PageFlag::kWrite))
+    {
+        ctx->Fault(FaultKind::kAccessViolation,
+                   FirstInaccessible(ctx->memory, linear, bytes, true), true);
+        return false;
+    }
+    return true;
+}
 
 bool ReadVirtual(Ctx* ctx, const Segment segment, const std::uint32_t offset,
                  const unsigned width_bits, std::uint32_t* value)
@@ -232,7 +315,9 @@ bool ReadVirtual(Ctx* ctx, const Segment segment, const std::uint32_t offset,
     }
     if (!ok)
     {
-        ctx->Fault(FaultKind::kAccessViolation, linear, false);
+        ctx->Fault(FaultKind::kAccessViolation,
+                   FirstInaccessible(ctx->memory, linear, width_bits / 8u, false),
+                   false);
     }
     return ok;
 }
@@ -283,7 +368,9 @@ bool WriteVirtual(Ctx* ctx, const Segment segment, const std::uint32_t offset,
     }
     if (!ok)
     {
-        ctx->Fault(FaultKind::kAccessViolation, linear, true);
+        ctx->Fault(FaultKind::kAccessViolation,
+                   FirstInaccessible(ctx->memory, linear, width_bits / 8u, true),
+                   true);
     }
     return ok;
 }
@@ -326,9 +413,19 @@ bool ReadOperand(Ctx* ctx, const ZydisDecodedOperand& operand,
             }
         }
         case ZYDIS_OPERAND_TYPE_MEMORY:
-            return ReadVirtual(ctx, SegmentOf(ctx->decoded, operand),
-                               EffectiveAddress(*ctx, operand), operand.size,
-                               value);
+        {
+            const Segment segment = SegmentOf(ctx->decoded, operand);
+            const std::uint32_t offset = EffectiveAddress(*ctx, operand);
+            // The read of a read-modify-write destination is already
+            // checked as a write: a read-only segment faults #GP before
+            // the read can page-fault (measured by the integer host fuzz).
+            if ((operand.actions & ZYDIS_OPERAND_ACTION_MASK_WRITE) != 0 &&
+                !RequireWritable(ctx, segment, offset))
+            {
+                return false;
+            }
+            return ReadVirtual(ctx, segment, offset, operand.size, value);
+        }
         case ZYDIS_OPERAND_TYPE_IMMEDIATE:
             *value = static_cast<std::uint32_t>(operand.imm.value.u) &
                 WidthMask(operand.size);

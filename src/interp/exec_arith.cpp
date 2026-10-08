@@ -517,7 +517,8 @@ ExecStatus ExecBitTest(Ctx* ctx, const ZydisMnemonic mnemonic)
             WidthMask(d.instruction.address_width);
         const Segment segment = SegmentOf(d, ops[0]);
         std::uint32_t value = 0;
-        if (!ReadVirtual(ctx, segment, address, width, &value))
+        if ((write && !RequireWritable(ctx, segment, address)) ||
+            !ReadVirtual(ctx, segment, address, width, &value))
         {
             return ExecStatus::kFault;
         }
@@ -639,7 +640,9 @@ ExecStatus ExecEnter(Ctx* ctx)
         std::uint32_t walker = s.Get(Gpr::kEbp);
         for (unsigned level = 1; level < nesting; ++level)
         {
-            walker = (walker - width / 8u) & WidthMask(width);
+            // The display walk steps (E)BP at the stack's width, not the
+            // operand's (SDM ENTER: "IF StackSize = 32 ... EBP <- EBP - 2").
+            walker = (walker - width / 8u) & sp_mask;
             std::uint32_t display = 0;
             if (!ReadVirtual(ctx, Segment::kSs, walker & sp_mask, width,
                              &display) ||
@@ -662,7 +665,15 @@ ExecStatus ExecEnter(Ctx* ctx)
         s.Set(Gpr::kEbp, frame_temp);
     }
     const std::uint32_t sp = s.Get(Gpr::kEsp);
-    s.Set(Gpr::kEsp, ((sp - alloc) & sp_mask) | (sp & ~sp_mask));
+    const std::uint32_t new_sp = ((sp - alloc) & sp_mask) | (sp & ~sp_mask);
+    // The processor probes a write at the final stack pointer and faults
+    // there, after the frame pushes have landed (SDM ENTER, #PF; measured
+    // by the integer host fuzz).
+    if (!ProbeWrite(ctx, Segment::kSs, new_sp & sp_mask, 8))
+    {
+        return ExecStatus::kFault;
+    }
+    s.Set(Gpr::kEsp, new_sp);
     return ExecStatus::kContinue;
 }
 
@@ -804,6 +815,11 @@ ExecStatus ExecuteExtended(Ctx* ctx, std::uint32_t* next_eip,
         return status;
     }
     status = ExecuteSegments(ctx, next_eip);
+    if (status != ExecStatus::kUnimplemented)
+    {
+        return status;
+    }
+    status = ExecutePost386(ctx);
     if (status != ExecStatus::kUnimplemented)
     {
         return status;

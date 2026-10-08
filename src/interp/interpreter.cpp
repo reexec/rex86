@@ -155,6 +155,7 @@ ExecStatus Execute(Ctx* ctx, std::uint32_t* next_eip, Event* stop_event)
     switch (mnemonic)
     {
         case ZYDIS_MNEMONIC_NOP:
+        case ZYDIS_MNEMONIC_PAUSE:  // REP NOP before the Pentium 4
             return ExecStatus::kContinue;
 
         case ZYDIS_MNEMONIC_MOV:
@@ -760,6 +761,9 @@ StepResult Step(CpuState& state, GuestMemory& memory,
         ((isa == ZYDIS_ISA_SET_X87 || isa == ZYDIS_ISA_SET_FCMOV ||
           isa == ZYDIS_ISA_SET_FCOMI) &&
          !features.x87) ||
+        ((isa == ZYDIS_ISA_SET_CMOV || isa == ZYDIS_ISA_SET_FCMOV ||
+          isa == ZYDIS_ISA_SET_FCOMI) &&
+         !features.cmov) ||
         (isa == ZYDIS_ISA_SET_PENTIUMMMX && !features.mmx) ||
         (isa == ZYDIS_ISA_SET_SSE && !features.sse) ||
         ((isa == ZYDIS_ISA_SET_SSE2 || isa == ZYDIS_ISA_SET_SSE2MMX) &&

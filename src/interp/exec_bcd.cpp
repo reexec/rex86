@@ -130,28 +130,43 @@ ExecStatus ExecBound(Ctx* ctx)
     }
     const Segment segment = SegmentOf(d, ops[1]);
     const std::uint32_t address = EffectiveAddress(*ctx, ops[1]);
-    std::uint32_t lower = 0;
-    std::uint32_t upper = 0;
-    if (!ReadVirtual(ctx, segment, address, width, &lower) ||
-        !ReadVirtual(ctx, segment,
-                     (address + width / 8u) &
-                         WidthMask(d.instruction.address_width),
-                     width, &upper))
-    {
-        return ExecStatus::kFault;
-    }
     const auto as_signed = [width](const std::uint32_t value) {
         return static_cast<std::int32_t>(
             (value & SignBit(width)) != 0 ? value | ~WidthMask(width)
                                           : value & WidthMask(width));
     };
     const std::int32_t i = as_signed(index);
-    if (i < as_signed(lower) || i > as_signed(upper))
-    {
+    const auto out_of_bounds = [ctx]() {
         ctx->Fault(FaultKind::kBound,
                    ctx->state.Seg(Segment::kCs).base + ctx->state.eip,
                    false);
         return ExecStatus::kFault;
+    };
+    // The segment limit covers both bounds before anything is read (the
+    // 386EX raises #GP for an upper bound past the limit, SST); then the
+    // lower bound is compared before the upper bound is read, so an index
+    // below it raises #BR even when the upper bound's page would fault
+    // (the integer host fuzz).
+    const std::uint32_t upper_address =
+        (address + width / 8u) & WidthMask(d.instruction.address_width);
+    std::uint32_t lower = 0;
+    if (!CheckSegment(ctx, segment, upper_address, width) ||
+        !ReadVirtual(ctx, segment, address, width, &lower))
+    {
+        return ExecStatus::kFault;
+    }
+    if (i < as_signed(lower))
+    {
+        return out_of_bounds();
+    }
+    std::uint32_t upper = 0;
+    if (!ReadVirtual(ctx, segment, upper_address, width, &upper))
+    {
+        return ExecStatus::kFault;
+    }
+    if (i > as_signed(upper))
+    {
+        return out_of_bounds();
     }
     return ExecStatus::kContinue;
 }

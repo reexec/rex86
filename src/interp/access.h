@@ -59,12 +59,25 @@ std::uint32_t EffectiveAddress(const Ctx& ctx,
 
 // Data access through a segment: limit check (kStackFault through SS,
 // kGeneralProtection otherwise), then guest memory (kAccessViolation),
-// little-endian. width_bits is 8, 16 or 32. A store to a kTranslated page
-// clears the flag and reports OnCodePageWritten before the store.
+// little-endian. width_bits is 8, 16 or 32. An access violation reports
+// the first byte that cannot be reached, as CR2 does. A store to a
+// kTranslated page clears the flag and reports OnCodePageWritten before
+// the store.
 bool ReadVirtual(Ctx* ctx, Segment segment, std::uint32_t offset,
                  unsigned width_bits, std::uint32_t* value);
 bool WriteVirtual(Ctx* ctx, Segment segment, std::uint32_t offset,
                   unsigned width_bits, std::uint32_t value);
+// The segment half of a read: presence and limit, no memory access.
+bool CheckSegment(Ctx* ctx, Segment segment, std::uint32_t offset,
+                  unsigned width_bits);
+// The segment half of a write check, for the read of a read-modify-write
+// destination: a read-only segment is #GP before the read can page-fault
+// (measured by the integer host fuzz).
+bool RequireWritable(Ctx* ctx, Segment segment, std::uint32_t offset);
+// The checks of a WriteVirtual without the store: ENTER's probe of its
+// final stack pointer (SDM ENTER, #PF).
+bool ProbeWrite(Ctx* ctx, Segment segment, std::uint32_t offset,
+                unsigned width_bits);
 
 // Explicit-operand read/write: register, memory or immediate (immediates
 // never write). Values are zero-extended to 32 bits.

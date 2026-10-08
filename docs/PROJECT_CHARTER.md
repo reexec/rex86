@@ -26,6 +26,10 @@ Both consumers hold to one principle: the original code owns the game logic, and
 
 코어 자체는 위 모든 호스트에서 빌드되고 같은 결과를 내야 하며, CI가 Windows x86, Linux x64, Linux i386, Linux AArch64, wasm32에서 그것을 확인한다.
 
+## 지원 CPU 사양
+
+최소 지원 사양은 대상 기판의 CPU다: 안다미로 MK3(Pentium II 또는 Celeron 333~366 MHz), MK5(Celeron 1.3 GHz, Tualatin), EZ2DJ 1세대(AMD K6-2 300~400 MHz), 2세대(Celeron 533 MHz 또는 K6-2, 미확정). 코어는 그 합집합의 상한인 **P6 정수, P6 x87, MMX, SSE(Pentium III)**를 구현하고, 소비자는 흉내 낼 기판에 맞춰 `Features`를 끈다. SSE2 이후는 범위 밖이고, 3DNow!는 census가 사용을 확인할 때만 넣는다. 성능의 실시간 기준도 기판별 CPU이며 상한은 MK5다. 근거: [대상 기판의 CPU](kb/target-board-cpus.md), [#21 설계](design/20261008-i021-target-board-cpu-baseline.md).
+
 ## Target Hosts
 
 | Host | How the guest runs | Core engine | Status |
@@ -37,6 +41,10 @@ Both consumers hold to one principle: the original code owns the game logic, and
 | Windows x86, Linux x86, Linux x64, Windows x64 | the consumers' existing direct execution | the core as comparison oracle and diagnostic fallback | unchanged |
 
 The core itself must build and give the same results on every host above; CI checks that on Windows x86, Linux x64, Linux i386, Linux AArch64 and wasm32.
+
+## Supported CPU Specification
+
+The minimum supported specification is the target boards' CPUs: Andamiro MK3 (Pentium II or Celeron, 333-366 MHz), MK5 (Celeron 1.3 GHz, Tualatin), EZ2DJ generation 1 (AMD K6-2, 300-400 MHz) and generation 2 (Celeron 533 MHz or K6-2, unresolved). The core implements their union's ceiling, **P6 integer, P6 x87, MMX and SSE (Pentium III)**, and consumers turn `Features` off to match the board they emulate. SSE2 and later are out of scope; 3DNow! enters only if a census confirms its use. Real time is also judged per board CPU, the MK5 being the ceiling. See [the target boards' CPUs](kb/target-board-cpus.md) and the [#21 design](design/20261008-i021-target-board-cpu-baseline.md).
 
 ---
 

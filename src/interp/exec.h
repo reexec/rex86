@@ -49,6 +49,10 @@ ExecStatus ExecuteX87Control(Ctx* ctx);
 // Increment 3 (#15): AAA/AAS/DAA/DAS/AAM/AAD, BOUND, SALC.
 ExecStatus ExecuteBcd(Ctx* ctx);
 
+// The integer instructions after the 386 (#22): BSWAP, XADD, CMPXCHG,
+// CMPXCHG8B, CMOVcc and UD0/UD1/UD2.
+ExecStatus ExecutePost386(Ctx* ctx);
+
 // The tail of the dispatch: every group file in order, then
 // kUnimplemented.
 ExecStatus ExecuteExtended(Ctx* ctx, std::uint32_t* next_eip,
