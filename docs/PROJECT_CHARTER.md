@@ -28,7 +28,7 @@ Both consumers hold to one principle: the original code owns the game logic, and
 
 ## 지원 CPU 사양
 
-최소 지원 사양은 대상 기판의 CPU다: 안다미로 MK3(Pentium II 또는 Celeron 333~366 MHz), MK5(Celeron 1.3 GHz, Tualatin), EZ2DJ 1세대(AMD K6-2 300~400 MHz), 2세대(Celeron 533 MHz 또는 K6-2, 미확정). 코어는 그 합집합의 상한인 **P6 정수, P6 x87, MMX, SSE(Pentium III)**를 구현하고, 소비자는 흉내 낼 기판에 맞춰 `Features`를 끈다. SSE2 이후는 범위 밖이고, 3DNow!는 census가 사용을 확인할 때만 넣는다. 성능의 실시간 기준도 기판별 CPU이며 상한은 MK5다. 근거: [대상 기판의 CPU](kb/target-board-cpus.md), [#21 설계](design/20261008-i021-target-board-cpu-baseline.md).
+최소 지원 사양은 대상 기판의 CPU다: 안다미로 MK3(Mendocino Celeron 333~400 MHz), MK5(Celeron 1.0~1.3 GHz, 1.3 GHz는 Tualatin), EZ2DJ 1세대(AMD K6-2 300~400 MHz, 1st~6th TRAX), 2세대(Pentium III Coppermine 533 MHz~1.0 GHz 또는 Tualatin Celeron 1.1~1.4 GHz, 7th TRAX~EVOLVE). 코어는 그 합집합의 상한인 **P6 정수, P6 x87, MMX, SSE(Pentium III)**를 구현하고, 소비자는 흉내 낼 기판에 맞춰 `Features`를 끈다. SSE2 이후는 범위 밖이고, 3DNow!는 census가 사용을 확인할 때만 넣는다. 성능의 실시간 기준도 기판별 CPU(변형이 여럿이면 가장 빠른 변형)이며 상한은 EZ2DJ 2세대의 1.4 GHz다. 근거: [대상 기판의 CPU](kb/target-board-cpus.md), [#21 설계](design/20261008-i021-target-board-cpu-baseline.md).
 
 ## Target Hosts
 
@@ -44,7 +44,7 @@ The core itself must build and give the same results on every host above; CI che
 
 ## Supported CPU Specification
 
-The minimum supported specification is the target boards' CPUs: Andamiro MK3 (Pentium II or Celeron, 333-366 MHz), MK5 (Celeron 1.3 GHz, Tualatin), EZ2DJ generation 1 (AMD K6-2, 300-400 MHz) and generation 2 (Celeron 533 MHz or K6-2, unresolved). The core implements their union's ceiling, **P6 integer, P6 x87, MMX and SSE (Pentium III)**, and consumers turn `Features` off to match the board they emulate. SSE2 and later are out of scope; 3DNow! enters only if a census confirms its use. Real time is also judged per board CPU, the MK5 being the ceiling. See [the target boards' CPUs](kb/target-board-cpus.md) and the [#21 design](design/20261008-i021-target-board-cpu-baseline.md).
+The minimum supported specification is the target boards' CPUs: Andamiro MK3 (Mendocino Celeron, 333-400 MHz), MK5 (Celeron 1.0-1.3 GHz, the 1.3 GHz a Tualatin), EZ2DJ generation 1 (AMD K6-2, 300-400 MHz, 1st through 6th TRAX) and generation 2 (a Coppermine Pentium III at 533 MHz-1.0 GHz or a Tualatin Celeron at 1.1-1.4 GHz, 7th TRAX through EVOLVE). The core implements their union's ceiling, **P6 integer, P6 x87, MMX and SSE (Pentium III)**, and consumers turn `Features` off to match the board they emulate. SSE2 and later are out of scope; 3DNow! enters only if a census confirms its use. Real time is also judged per board CPU (the fastest variant where there are several), generation 2 EZ2DJ's 1.4 GHz being the ceiling. See [the target boards' CPUs](kb/target-board-cpus.md) and the [#21 design](design/20261008-i021-target-board-cpu-baseline.md).
 
 ---
 
