@@ -1,10 +1,10 @@
 # 32비트 정수 명령 호스트 CPU 대조에서 확인된 사실 / Facts from the 32-bit integer host-CPU comparison
 
-근거 작업: [#22](https://github.com/reexec/rex86/issues/22) ([설계](../design/20261008-i022-integer-host-fuzz-and-trace.md), [로그](../work-logs/20261008-i022-integer-host-fuzz-and-trace.md)) | 도구: `rex86_int_fuzz`([가이드](../guides/integer-host-fuzz-and-traces.md)) | 기법: [트랩 플래그 단일 스텝](../kb/trap-flag-single-step.md) | 측정 호스트: Intel Xeon Cascade Lake(family 6 model 85 stepping 7), Linux x86-64 커널 위의 i386 프로세스
+근거 작업: [#22](https://github.com/reexec/rex86/issues/22) ([설계](../design/20261008-i022-integer-host-fuzz-and-trace.md), [로그](../work-logs/20261008-i022-integer-host-fuzz-and-trace.md)) | 도구: `rex86_int_fuzz`([가이드](../guides/integer-host-fuzz-and-traces.md)) | 기법: [트랩 플래그 단일 스텝](../kb/trap-flag-single-step.md) | 측정 호스트: Intel Xeon Cascade Lake(family 6 model 85 stepping 7, 긴 실행), AMD EPYC 7763(Zen 3, CI `linux-x86` 작업의 짧은 실행), 둘 다 Linux x86-64 커널 위의 i386 프로세스
 
-상태 표기: **확인됨**(호스트에서 같은 바이트를 실행해 일치를 확인), **추정**, **미확정**. "확인됨"은 위 Intel 호스트 한 종류에서의 확인이다. 386 세대와 다른 점은 SingleStepTests/80386(386EX, [분석](singlesteptests-386ex-deviations.md))과 함께 적는다.
+상태 표기: **확인됨**(호스트에서 같은 바이트를 실행해 일치를 확인), **추정**, **미확정**. "확인됨"은 위 Intel 호스트의 긴 실행에서의 확인이고, AMD에서는 CI의 5만 건에서 어긋나지 않았다는 데까지다. 386 세대와 다른 점은 SingleStepTests/80386(386EX, [분석](singlesteptests-386ex-deviations.md))과 함께 적는다.
 
-*Status marks as elsewhere; "confirmed" means confirmed on the one Intel host above. Where the 386 generation differs, SingleStepTests/80386 (a 386EX, [analysis](singlesteptests-386ex-deviations.md)) is cited alongside.*
+*Status marks as elsewhere; "confirmed" means confirmed by the long runs on the Intel host above, AMD's share being that the CI's 50,000 cases did not disagree. Where the 386 generation differs, SingleStepTests/80386 (a 386EX, [analysis](singlesteptests-386ex-deviations.md)) is cited alongside.*
 
 ## 1. 방법 / Method
 
@@ -12,9 +12,9 @@ i386 프로세스가 0x10000에 코드 페이지, 8 KiB 작업 영역, 8 KiB 보
 
 생성: 1바이트와 `0F xx` opcode의 modrm.reg별 형태 1,112개(149개 mnemonic, ISA 집합 I86, I186, I386, I486, I486REAL, PENTIUMREAL, PPRO, CMOV, LAHF, FAT_NOP, PAUSE). 66, 67, 세그먼트 override, F2/F3, F0 prefix를 확률로 붙이고, 메모리 피연산자(숨은 [ESI], [EDI], [ESP] 포함)를 작업 영역으로 옮긴다. 환경과 권한에 묶인 명령은 뺐다(설계 결정 3).
 
-결과(최종 바이너리, 시드 100~109 × 100만): 1,000만 건 **불일치 0**. 약 93.6%가 retire, 나머지는 폴트(#PF, #GP, #UD, #DE, #BR 순)다.
+결과(최종 바이너리, Intel, 시드 100~109 × 100만): 1,000만 건 **불일치 0**. 약 93.6%가 retire, 나머지는 폴트(#PF, #GP, #UD, #DE, #BR 순)다. CI의 AMD EPYC 7763에서도 ctest의 5만 건(시드 1)이 불일치 0이다.
 
-*An i386 process maps a code page, an 8 KiB work area and an 8 KiB guard at 0x10000 and runs one random integer instruction right after a `popfd` that sets TF; the single-step trap's or the fault signal's context is the outcome. The core holds the same contents at **the same guest addresses** and replays the case as one trace (`trace::Replay`), comparing the outcome (retired, fault kind), the eight GPRs, EIP, EFLAGS (RF aside), the whole code page and work area, and #PF's fault address. Generation draws from 1,112 forms (149 mnemonics) over one-byte and `0F xx` opcodes per modrm.reg, adds 66, 67, segment-override, F2/F3 and F0 prefixes by chance, and moves every memory operand (the hidden [ESI], [EDI], [ESP] included) into the work area; environment- and privilege-bound instructions are left out (design decision 3). Final binary, seeds 100-109 × 1M: 10M cases with **zero mismatches**, about 93.6% retiring and the rest faulting (#PF, #GP, #UD, #DE, #BR in that order).*
+*An i386 process maps a code page, an 8 KiB work area and an 8 KiB guard at 0x10000 and runs one random integer instruction right after a `popfd` that sets TF; the single-step trap's or the fault signal's context is the outcome. The core holds the same contents at **the same guest addresses** and replays the case as one trace (`trace::Replay`), comparing the outcome (retired, fault kind), the eight GPRs, EIP, EFLAGS (RF aside), the whole code page and work area, and #PF's fault address. Generation draws from 1,112 forms (149 mnemonics) over one-byte and `0F xx` opcodes per modrm.reg, adds 66, 67, segment-override, F2/F3 and F0 prefixes by chance, and moves every memory operand (the hidden [ESI], [EDI], [ESP] included) into the work area; environment- and privilege-bound instructions are left out (design decision 3). Final binary on Intel, seeds 100-109 × 1M: 10M cases with **zero mismatches**, about 93.6% retiring and the rest faulting (#PF, #GP, #UD, #DE, #BR in that order); ctest's 50,000 cases (seed 1) show zero mismatches on the CI's AMD EPYC 7763 too.*
 
 ## 2. 코어에 반영한 동작 / Behavior adopted by the core
 
@@ -45,8 +45,9 @@ SDM이 미정의로 두는 것과 호스트의 인공물은 비교에서 뺀다(
 
 ## 4. 미확정 / Unresolved
 
-* AMD 호스트와 P6 세대 실물에서의 위 모든 항목. 확인 방법: 그 호스트의 i386 프로세스에서 `rex86_int_fuzz`를 긴 시드로 실행한다(가이드).
+* AMD 호스트의 긴 실행과 P6 세대 실물에서의 위 모든 항목. 확인 방법: 그 호스트의 i386 프로세스에서 `rex86_int_fuzz`를 긴 시드로 실행한다(가이드).
+* 문자열이 아닌 명령에 붙은 F2/F3: SDM은 이 사용을 예약으로 두고 "예측할 수 없는 동작"을 허용한다(Vol. 2, 2.1.1). 실제로 F3 LOOPNE의 분기 여부가 AMD EPYC 7763(CI, 7건)과 Intel 호스트, 코어 사이에서 갈렸다. 생성기는 이 조합을 만들지 않는다(PAUSE, F3 90만 예외).
 * 환경과 권한에 묶여 뺀 명령(세그먼트 적재, far 제어 흐름, IRET, 포트 I/O, INT n, 특권 명령): 보호 모드 의미가 호스트 OS의 GDT/LDT에 묶인다. 실모드 의미는 SST가 검증한다.
 * 16비트 주소(67 prefix)의 메모리 접근은 호스트에서 늘 0x10000 아래의 비매핑 주소라 폴트 경로만 비교된다. 16비트 주소의 성공 경로는 SST가 검증한다.
 
-*Unresolved: everything above on AMD hosts and on P6-generation hardware (run `rex86_int_fuzz` with long seeds in an i386 process there, per the guide); the environment- and privilege-bound instructions left out, whose protected-mode meaning hangs on the host OS's GDT/LDT (their real-mode meaning is SST's); and 16-bit-addressed memory accesses, which always land below 0x10000 on the host and so compare only their fault paths (SST covers the successful ones).*
+*Unresolved: everything above in long runs on AMD hosts and on P6-generation hardware (run `rex86_int_fuzz` with long seeds in an i386 process there, per the guide); F2/F3 on non-string instructions, which the SDM reserves with "unpredictable behavior" (Vol. 2, 2.1.1) and where F3 LOOPNE indeed took its branch differently on the CI's AMD EPYC 7763 (7 cases) than on the Intel host and the core, so the generator no longer makes them (PAUSE, F3 90, aside); the environment- and privilege-bound instructions left out, whose protected-mode meaning hangs on the host OS's GDT/LDT (their real-mode meaning is SST's); and 16-bit-addressed memory accesses, which always land below 0x10000 on the host and so compare only their fault paths (SST covers the successful ones).*
