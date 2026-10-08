@@ -103,4 +103,17 @@ std::uint16_t CanonicalControlWord(const std::uint16_t value)
     return static_cast<std::uint16_t>((value & 0x1F3Fu) | 0x0040u);
 }
 
+bool StackFault(X87State* x87, const bool overflow)
+{
+    SetConditions(x87, kC1, overflow ? kC1 : 0);
+    Raise(x87, fpu::kInvalid | fpu::kStackFault);
+    return (x87->control_word & fpu::kInvalid) != 0;
+}
+
+void Commit(X87State* x87, const fpu::Status& status, const bool written)
+{
+    SetConditions(x87, kC1, written && status.round_up ? kC1 : 0);
+    Raise(x87, status.raised);
+}
+
 }  // namespace rex86::interp::x87

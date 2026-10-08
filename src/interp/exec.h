@@ -39,12 +39,15 @@ ExecStatus ExecuteStrings(Ctx* ctx, Event* stop_event);
 // is overwritten by a taken far branch.
 ExecStatus ExecuteSegments(Ctx* ctx, std::uint32_t* next_eip);
 
-// x87 increment 1 (#19): every x87 instruction but the transcendentals,
-// FWAIT's #MF included. kUnimplemented for anything that is not x87.
+// The x87 (#19, the transcendentals #25), FWAIT's #MF included.
+// kUnimplemented for anything that is not x87.
 ExecStatus ExecuteX87(Ctx* ctx);
 
 // The x87 control and environment instructions, called by ExecuteX87.
 ExecStatus ExecuteX87Control(Ctx* ctx);
+
+// The x87 transcendentals (#25), called by ExecuteX87.
+ExecStatus ExecuteX87Transcendental(Ctx* ctx);
 
 // Increment 3 (#15): AAA/AAS/DAA/DAS/AAM/AAD, BOUND, SALC.
 ExecStatus ExecuteBcd(Ctx* ctx);

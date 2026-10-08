@@ -10,11 +10,16 @@
 // [rdi]/[rsi]/[rbx] in 64-bit mode). Memory operands are [ebx].
 //
 // Usage: rex86_x87_fuzz [iterations] [seed] [--verbose] [--record FILE]
+//                       [--only MNEMONIC[,MNEMONIC...]] [--show-tolerance]
+//                       [--dump FILE]
 //        rex86_x87_fuzz --replay <code hex> <image hex> <data hex> <flags hex>
 // The replay form runs one case (as a MISMATCH line prints it) and dumps
 // both sides. --record writes every matching case as a trace (design #22,
 // decision 5), replayed on the spot as a check of the recording itself;
-// vendor deviations are left out, since a trace holds one expectation.
+// vendor deviations and tolerated cases are left out, since a trace holds
+// one expectation. The transcendentals (#25) are judged with an ulp
+// tolerance; --show-tolerance prints those cases, --dump writes every
+// transcendental case for scripts/x87_transcendental_oracle.py.
 
 #if !defined(__linux__) || !(defined(__x86_64__) || defined(__i386__))
 #error "the x87 host comparison runs on x86 or x86-64 Linux only"
@@ -58,17 +63,36 @@ bool Excluded(const ZydisMnemonic mnemonic)
 {
     switch (mnemonic)
     {
-        // Increment 2: the transcendentals.
-        case ZYDIS_MNEMONIC_FSIN: case ZYDIS_MNEMONIC_FCOS:
-        case ZYDIS_MNEMONIC_FSINCOS: case ZYDIS_MNEMONIC_FPTAN:
-        case ZYDIS_MNEMONIC_FPATAN: case ZYDIS_MNEMONIC_F2XM1:
-        case ZYDIS_MNEMONIC_FYL2X: case ZYDIS_MNEMONIC_FYL2XP1:
         // Out of scope (SSE3) and the 8087/287 no-ops (no state to compare).
         case ZYDIS_MNEMONIC_FISTTP:
             return true;
         default:
             return false;
     }
+}
+
+// The transcendentals (#25), judged with an ulp tolerance.
+enum class Transcendental : std::uint8_t
+{
+    kNone,
+    kTrig,        // fsin fcos: ST(0) in place, argument reduction
+    kTrigPush,    // fsincos fptan: ST(0) replaced, one push
+    kExp,         // f2xm1
+    kAtan,        // fpatan
+    kLog,         // fyl2x
+    kLogPlus1,    // fyl2xp1
+};
+
+Transcendental TranscendentalOf(const std::string& mnemonic)
+{
+    const std::string base = mnemonic.substr(0, mnemonic.find(' '));
+    if (base == "fsin" || base == "fcos") return Transcendental::kTrig;
+    if (base == "fsincos" || base == "fptan") return Transcendental::kTrigPush;
+    if (base == "f2xm1") return Transcendental::kExp;
+    if (base == "fpatan") return Transcendental::kAtan;
+    if (base == "fyl2x") return Transcendental::kLog;
+    if (base == "fyl2xp1") return Transcendental::kLogPlus1;
+    return Transcendental::kNone;
 }
 
 std::vector<Form> BuildForms()
@@ -268,7 +292,128 @@ public:
         }
     }
 
+    // Most of the time, valid ST(0)/ST(1) (and an empty ST(7) for the
+    // pushing forms) holding values from the instruction's domain: the
+    // generic generator's wide exponents would leave nearly every
+    // trigonometric argument beyond 2^63 (design #25, decision 5).
+    void Transcendental(std::uint8_t image[kImageSize], const ::Transcendental kind)
+    {
+        if (kind == ::Transcendental::kNone || Chance(15)) return;
+        const unsigned top = (image[5] >> 3) & 7u;
+        std::uint16_t tw = static_cast<std::uint16_t>(image[8] | (image[9] << 8));
+        for (unsigned st = 0; st < 2; ++st)
+        {
+            tw = static_cast<std::uint16_t>(tw & ~(3u << (2 * ((top + st) & 7u))));
+        }
+        if (kind == ::Transcendental::kTrigPush && Chance(90))
+        {
+            tw = static_cast<std::uint16_t>(tw | (3u << (2 * ((top + 7) & 7u))));
+        }
+        image[8] = static_cast<std::uint8_t>(tw);
+        image[9] = static_cast<std::uint8_t>(tw >> 8);
+        if (Chance(10)) return;  // the generic values, specials included
+        switch (kind)
+        {
+            case ::Transcendental::kTrig:
+            case ::Transcendental::kTrigPush:
+                TrigArgument(image + 28);
+                break;
+            case ::Transcendental::kExp:
+                Ranged(image + 28, -72, -1, Chance(5) ? 0 : -1);
+                break;
+            case ::Transcendental::kAtan:
+                Ranged(image + 28, -40, 40, -1);
+                Ranged(image + 38, -40, 40, -1);
+                if (Chance(15)) Ranged(image + 38, -16000, 16000, -1);
+                break;
+            case ::Transcendental::kLog:
+                if (Chance(20))
+                {
+                    NearOne(image + 28);
+                }
+                else
+                {
+                    Ranged(image + 28, Chance(20) ? -16000 : -64, Chance(20) ? 16000 : 64, 0);
+                }
+                Ranged(image + 38, -64, 64, -1);
+                if (Chance(5)) Ranged(image + 38, -16000, 16000, -1);
+                break;
+            case ::Transcendental::kLogPlus1:
+                Ranged(image + 28, -80, Chance(10) ? 1 : -2, -1);
+                Ranged(image + 38, -64, 64, -1);
+                break;
+            case ::Transcendental::kNone:
+                break;
+        }
+    }
+
 private:
+    void Store(std::uint8_t out[10], const std::uint64_t significand,
+               const std::uint16_t sign_exponent)
+    {
+        for (int i = 0; i < 8; ++i) out[i] = static_cast<std::uint8_t>(significand >> (8 * i));
+        out[8] = static_cast<std::uint8_t>(sign_exponent);
+        out[9] = static_cast<std::uint8_t>(sign_exponent >> 8);
+    }
+
+    // A normal value with an unbiased exponent in [low, high]; `sign` -1
+    // random, 0 positive, 1 negative.
+    void Ranged(std::uint8_t out[10], const int low, const int high, const int sign)
+    {
+        const int e = low + static_cast<int>(Bits(32) % static_cast<std::uint64_t>(high - low + 1));
+        std::uint64_t significand = Bits(64) | (1ull << 63);
+        if (Chance(10)) significand = 1ull << 63;           // a power of two
+        if (Chance(5)) significand = ~0ull;                  // all ones
+        const bool negative = sign < 0 ? Chance(50) : sign > 0;
+        Store(out, significand,
+              static_cast<std::uint16_t>((negative ? 0x8000u : 0u) |
+                                         static_cast<unsigned>(0x3FFF + e)));
+    }
+
+    // 1 plus or minus a few ulps.
+    void NearOne(std::uint8_t out[10])
+    {
+        if (Chance(50))
+        {
+            Store(out, (1ull << 63) + Bits(4), 0x3FFF);
+        }
+        else
+        {
+            Store(out, ~0ull - Bits(4), 0x3FFE);
+        }
+    }
+
+    // A trigonometric argument: spread exponents, the 2^-68 shortcut and
+    // 2^63 range edges, and values within a few ulps of a multiple of the
+    // x87's Pi/2 (where reduction cancels).
+    void TrigArgument(std::uint8_t out[10])
+    {
+        switch (Bits(8) % 8)
+        {
+            case 0: Ranged(out, -75, -60, -1); return;
+            case 1: Ranged(out, 60, 63, -1); return;
+            case 2:
+            case 3:
+            {
+                // k * Pi/2 (Pi = 0.C90FDAA2 2168C234 C * 2^2) to 64 bits,
+                // then nudged.
+                const long double half_pi = 0x1.921FB54442D184698p0L;
+                const std::uint64_t k = 1 + Bits(Chance(70) ? 12 : 40);
+                long double x = static_cast<long double>(k) * half_pi;
+                std::uint8_t bytes[16] = {};
+                std::memcpy(bytes, &x, 10);
+                std::uint64_t significand = 0;
+                std::memcpy(&significand, bytes, 8);
+                significand += Bits(3) - 4;
+                std::uint16_t se = static_cast<std::uint16_t>(bytes[8] | (bytes[9] << 8));
+                if (Chance(50)) se |= 0x8000u;
+                Store(out, significand | (1ull << 63), se);
+                return;
+            }
+            default: Ranged(out, -70, 62, -1); return;
+        }
+    }
+
     std::mt19937_64 rng_;
 };
 
@@ -564,6 +709,121 @@ bool PassThroughUnderflow(const std::string& mnemonic, const Input& input,
     return Difference(host, patched).empty();
 }
 
+// --- the transcendentals' tolerance (design #25, decision 5) ---------------
+
+struct Reg80
+{
+    std::uint64_t significand = 0;
+    std::uint16_t sign_exponent = 0;
+};
+
+Reg80 ReadReg(const std::uint8_t* bytes)
+{
+    Reg80 r;
+    std::memcpy(&r.significand, bytes, 8);
+    r.sign_exponent = static_cast<std::uint16_t>(bytes[8] | (bytes[9] << 8));
+    return r;
+}
+
+// The next value up in magnitude, for a canonical finite value.
+Reg80 NextUp(Reg80 r)
+{
+    const std::uint16_t sign = r.sign_exponent & 0x8000u;
+    std::uint16_t exponent = r.sign_exponent & 0x7FFFu;
+    if (++r.significand == 0)
+    {
+        r.significand = 1ull << 63;
+        ++exponent;
+    }
+    else if (exponent == 0 && r.significand == (1ull << 63))
+    {
+        exponent = 1;  // the largest denormal steps into the normals
+    }
+    r.sign_exponent = static_cast<std::uint16_t>(sign | exponent);
+    return r;
+}
+
+bool Same(const Reg80& a, const Reg80& b)
+{
+    return a.significand == b.significand && a.sign_exponent == b.sign_exponent;
+}
+
+// The tolerated cases by kind: C1 alone, then the largest value distance.
+struct ToleranceStats
+{
+    std::uint64_t c1_only = 0;
+    std::uint64_t ulps[3] = {};  // [1], [2]: the largest distance seen in the case
+};
+
+// a and b finite, of one sign, within `ulps` of each other; *distance
+// gets the distance found.
+bool WithinUlps(Reg80 a, Reg80 b, const unsigned ulps, unsigned* distance)
+{
+    if ((a.sign_exponent & 0x8000u) != (b.sign_exponent & 0x8000u) ||
+        (a.sign_exponent & 0x7FFFu) == 0x7FFFu || (b.sign_exponent & 0x7FFFu) == 0x7FFFu)
+    {
+        return false;
+    }
+    const auto magnitude_less = [](const Reg80& x, const Reg80& y) {
+        const unsigned ex = x.sign_exponent & 0x7FFFu;
+        const unsigned ey = y.sign_exponent & 0x7FFFu;
+        return ex != ey ? ex < ey : x.significand < y.significand;
+    };
+    if (magnitude_less(b, a)) std::swap(a, b);
+    for (unsigned i = 0; i < ulps; ++i)
+    {
+        a = NextUp(a);
+        if (Same(a, b))
+        {
+            *distance = i + 1;
+            return true;
+        }
+    }
+    return false;
+}
+
+// A transcendental whose results differ from the host's by at most the
+// tolerance -- 1 ulp rounding to nearest, 2 ulps otherwise -- and whose C1
+// may differ, everything else equal. The core is correctly rounded, the
+// host within the SDM's 1 and 1.5 ulps (SDM Vol. 1, 8.3.10).
+bool WithinTolerance(const std::string& mnemonic, const Input& input, const Outcome& host,
+                     const Outcome& core, ToleranceStats* stats)
+{
+    if (TranscendentalOf(mnemonic) == Transcendental::kNone)
+    {
+        return false;
+    }
+    const unsigned rc = (input.image[1] >> 2) & 3u;
+    const unsigned ulps = rc == 0 ? 1 : 2;
+    Outcome patched = core;
+    unsigned largest = 0;
+    for (unsigned st = 0; st < 2; ++st)
+    {
+        const std::uint8_t* h = host.image + 28 + 10 * st;
+        const std::uint8_t* c = core.image + 28 + 10 * st;
+        if (std::memcmp(h, c, 10) == 0) continue;
+        unsigned distance = 0;
+        if (!WithinUlps(ReadReg(h), ReadReg(c), ulps, &distance)) return false;
+        largest = std::max(largest, distance);
+        std::memcpy(patched.image + 28 + 10 * st, h, 10);
+    }
+    patched.image[5] = static_cast<std::uint8_t>((patched.image[5] & ~0x02u) |
+                                                 (host.image[5] & 0x02u));  // C1
+    if (!Difference(host, patched).empty())
+    {
+        return false;
+    }
+    if (largest == 0)
+    {
+        ++stats->c1_only;
+    }
+    else
+    {
+        ++stats->ulps[largest];
+    }
+    return true;
+}
+
 std::vector<std::uint8_t> FromHex(const char* text)
 {
     std::vector<std::uint8_t> bytes;
@@ -680,7 +940,10 @@ int main(int argc, char** argv)
     std::uint64_t iterations = 20000;
     std::uint64_t seed = 1;
     bool verbose = false;
+    bool show_tolerance = false;
     std::string record_path;
+    std::string only;
+    std::string dump_path;
     int positional = 0;
     for (int i = 1; i < argc; ++i)
     {
@@ -688,9 +951,21 @@ int main(int argc, char** argv)
         {
             verbose = true;
         }
+        else if (std::strcmp(argv[i], "--show-tolerance") == 0)
+        {
+            show_tolerance = true;
+        }
         else if (std::strcmp(argv[i], "--record") == 0 && i + 1 < argc)
         {
             record_path = argv[++i];
+        }
+        else if (std::strcmp(argv[i], "--only") == 0 && i + 1 < argc)
+        {
+            only = argv[++i];
+        }
+        else if (std::strcmp(argv[i], "--dump") == 0 && i + 1 < argc)
+        {
+            dump_path = argv[++i];
         }
         else if (positional++ == 0)
         {
@@ -702,7 +977,25 @@ int main(int argc, char** argv)
         }
     }
 
-    const std::vector<Form> forms = BuildForms();
+    std::vector<Form> forms = BuildForms();
+    if (!only.empty())
+    {
+        // Keep the forms whose mnemonic (its first word) is in the
+        // comma-separated `only`.
+        const std::string list = "," + only + ",";
+        forms.erase(std::remove_if(forms.begin(), forms.end(),
+                                   [&](const Form& f) {
+                                       const std::string name =
+                                           "," + f.mnemonic.substr(0, f.mnemonic.find(' ')) + ",";
+                                       return list.find(name) == std::string::npos;
+                                   }),
+                    forms.end());
+        if (forms.empty())
+        {
+            std::fprintf(stderr, "no form named %s\n", only.c_str());
+            return 2;
+        }
+    }
     Generator gen(seed);
     HostRunner host;
     CoreRunner core;
@@ -713,16 +1006,27 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "%s\n", error.c_str());
         return 2;
     }
+    // --dump: every transcendental case, for the reference check by
+    // scripts/x87_transcendental_oracle.py (design #25, decision 5).
+    std::FILE* dump = nullptr;
+    if (!dump_path.empty() && (dump = std::fopen(dump_path.c_str(), "w")) == nullptr)
+    {
+        std::perror(dump_path.c_str());
+        return 2;
+    }
     std::map<std::string, std::uint64_t> failures;
     std::uint64_t mismatches = 0;
     std::uint64_t core_stops = 0;
     std::uint64_t vendor_deviations = 0;
+    std::uint64_t within_tolerance = 0;
+    ToleranceStats tolerance;
     for (std::uint64_t n = 0; n < iterations; ++n)
     {
         const Form& form = forms[gen.Bits(32) % forms.size()];
         Input input;
         input.code = form.bytes;
         gen.Image(input.image);
+        gen.Transcendental(input.image, TranscendentalOf(form.mnemonic));
         gen.Operand(input.data, form.memory_size);
         input.flags = static_cast<std::uint32_t>(0x202u | (gen.Bits(12) & 0x8D5u));
         input.eax = static_cast<std::uint32_t>(gen.Bits(32));
@@ -749,6 +1053,35 @@ int main(int argc, char** argv)
                 difference.clear();
                 deviation = true;
             }
+            else if (!difference.empty() &&
+                     WithinTolerance(form.mnemonic, input, expected, actual, &tolerance))
+            {
+                ++within_tolerance;
+                if (show_tolerance)
+                {
+                    std::printf("TOLERANCE %s: %s\n  --replay %s %s %s %08X\n",
+                                form.mnemonic.c_str(), difference.c_str(),
+                                Hex(form.bytes.data(), static_cast<unsigned>(form.bytes.size())).c_str(),
+                                Hex(input.image, kImageSize).c_str(),
+                                Hex(input.data, kDataSize).c_str(), input.flags);
+                }
+                difference.clear();
+                deviation = true;  // a trace holds the host's value, not recorded
+            }
+        }
+        if (dump != nullptr && event.reason == rex86::StopReason::kHalted &&
+            TranscendentalOf(form.mnemonic) != Transcendental::kNone)
+        {
+            const auto word = [](const std::uint8_t* image, const unsigned at) {
+                return static_cast<unsigned>(image[at] | (image[at + 1] << 8));
+            };
+            std::fprintf(dump, "%s %04X %04X %04X %s %s %04X %s %s %04X %s %s\n",
+                         form.mnemonic.substr(0, form.mnemonic.find(' ')).c_str(),
+                         word(input.image, 0), word(input.image, 4), word(input.image, 8),
+                         Hex(input.image + 28, 10).c_str(), Hex(input.image + 38, 10).c_str(),
+                         word(expected.image, 4), Hex(expected.image + 28, 10).c_str(),
+                         Hex(expected.image + 38, 10).c_str(), word(actual.image, 4),
+                         Hex(actual.image + 28, 10).c_str(), Hex(actual.image + 38, 10).c_str());
         }
         if (difference.empty() && !deviation && !record_path.empty())
         {
@@ -777,13 +1110,25 @@ int main(int argc, char** argv)
     {
         record.Close();
     }
+    if (dump != nullptr)
+    {
+        std::fclose(dump);
+    }
     std::printf("forms=%zu iterations=%llu seed=%llu mismatches=%llu core_stops=%llu "
-                "vendor_deviations=%llu\n",
+                "vendor_deviations=%llu within_tolerance=%llu\n",
                 forms.size(), static_cast<unsigned long long>(iterations),
                 static_cast<unsigned long long>(seed),
                 static_cast<unsigned long long>(mismatches),
                 static_cast<unsigned long long>(core_stops),
-                static_cast<unsigned long long>(vendor_deviations));
+                static_cast<unsigned long long>(vendor_deviations),
+                static_cast<unsigned long long>(within_tolerance));
+    if (within_tolerance != 0)
+    {
+        std::printf("tolerance: c1_only=%llu ulp1=%llu ulp2=%llu\n",
+                    static_cast<unsigned long long>(tolerance.c1_only),
+                    static_cast<unsigned long long>(tolerance.ulps[1]),
+                    static_cast<unsigned long long>(tolerance.ulps[2]));
+    }
     for (const auto& [mnemonic, count] : failures)
     {
         std::printf("  %-24s %llu\n", mnemonic.c_str(), static_cast<unsigned long long>(count));

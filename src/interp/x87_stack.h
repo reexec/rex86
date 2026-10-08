@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include "fpu/float80.h"
+#include "fpu/x87_math.h"
 #include "rex86/cpu_state.h"
 
 namespace rex86::interp::x87
@@ -51,6 +52,15 @@ void Raise(X87State* x87, std::uint16_t flags);
 void UpdateErrorSummary(X87State* x87);
 
 void SetConditions(X87State* x87, std::uint16_t mask, std::uint16_t value);
+
+// The x87's stack-fault response (SDM 8.5.1.1): #IS with C1 = 1 for an
+// overflow, 0 for an underflow. Returns true when the fault is masked and
+// the instruction goes on with the indefinite.
+bool StackFault(X87State* x87, bool overflow);
+
+// Folds one operation's status into SW. C1 reports the rounding
+// direction of a written inexact result and is cleared otherwise.
+void Commit(X87State* x87, const fpu::Status& status, bool written);
 
 // A control word as FLDCW, FLDENV and FRSTOR load it: the reserved bits
 // 7 and 13-15 read as zero and bit 6 as one (measured, #19).

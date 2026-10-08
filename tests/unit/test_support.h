@@ -64,6 +64,7 @@ void RunCensusTests(rex86::test::Context& context);
 void RunMooReaderTests(rex86::test::Context& context);
 void RunInterpTests(rex86::test::Context& context);
 void RunX87Tests(rex86::test::Context& context);
+void RunX87TranscendentalTests(rex86::test::Context& context);
 void RunPost386Tests(rex86::test::Context& context);
 void RunTraceTests(rex86::test::Context& context);
 

@@ -18,7 +18,7 @@ flowchart TB
         IR["translate/ir/ [계획]"]
         WASM["translate/wasm/ [계획]"]
         A64["translate/aarch64/ [계획]"]
-        FPU["fpu/ 80비트 x87 수치 모델 [구현됨, 초월함수 제외]"]
+        FPU["fpu/ 80비트 x87 수치 모델 [구현됨, 초월함수 포함]"]
         SF["third_party/softfloat [구현됨]"]
     end
     HOST["소비자 (rePIU, re2DJ)"] -- "Environment 구현" --> ENV
@@ -54,15 +54,15 @@ flowchart TB
 | 디렉터리 | 역할 | 단계 |
 |---|---|---|
 | `src/decode/` | **[구현됨]** Zydis(16/32비트 legacy 모드) 래퍼 `Decoder`, `DecodedInstruction`(길이, 서명, x87, 제어 흐름) | 1 |
-| `src/interp/` | **[구현됨, P6 정수 명령 완결]** 인터프리터: `interp::Step`(한 명령), `access`(주소 생성, 세그먼테이션, `LoadSegment`, SMC 검사), `flags`(즉시 계산), `exec_arith`(시프트, 곱셈/나눗셈, 비트 연산), `exec_strings`(문자열, 문자열 포트 I/O+REP), `exec_segments`(세그먼트 적재, 같은 권한의 far 제어 흐름, IRET, 특권 명령 거절), `exec_bcd`(BCD, BOUND, SALC), `exec_post386`(486 이후 정수: CMOVcc, BSWAP, XADD, CMPXCHG, CMPXCHG8B, UD0/1/2, #22), `exec_x87`/`exec_x87_env`/`x87_stack`/`x87_access`(x87 명령, 레지스터 스택, 태그, FIP/FDP, 환경 이미지, 다음 대기형 명령의 #MF). 블록 캐시는 측정 뒤 | 1 |
-| `src/fpu/` | **[구현됨, 초월함수 제외]** x87 수치 모델: `float80`(80비트 값과 분류), `x87_math`(SoftFloat 3e 위의 예외 의미, 우선순위, 지수 조정 결과, C1, FPREM, FSCALE, FXTRACT, BCD, 상수). 디코드를 모르므로 번역 백엔드의 helper로 재사용 | 1 |
+| `src/interp/` | **[구현됨, P6 정수 명령 완결]** 인터프리터: `interp::Step`(한 명령), `access`(주소 생성, 세그먼테이션, `LoadSegment`, SMC 검사), `flags`(즉시 계산), `exec_arith`(시프트, 곱셈/나눗셈, 비트 연산), `exec_strings`(문자열, 문자열 포트 I/O+REP), `exec_segments`(세그먼트 적재, 같은 권한의 far 제어 흐름, IRET, 특권 명령 거절), `exec_bcd`(BCD, BOUND, SALC), `exec_post386`(486 이후 정수: CMOVcc, BSWAP, XADD, CMPXCHG, CMPXCHG8B, UD0/1/2, #22), `exec_x87`/`exec_x87_env`/`exec_x87_transcendental`/`x87_stack`/`x87_access`(x87 명령, 초월함수의 스택과 C1/C2(#25), 레지스터 스택, 태그, 스택 폴트, FIP/FDP, 환경 이미지, 다음 대기형 명령의 #MF). 블록 캐시는 측정 뒤 | 1 |
+| `src/fpu/` | **[구현됨, x87 완결]** x87 수치 모델: `float80`(80비트 값과 분류), `softfloat_bridge`(SoftFloat 연결, 공통 피연산자 검사), `x87_math`(SoftFloat 3e 위의 예외 의미, 우선순위, 지수 조정 결과, C1, FPREM, FSCALE, FXTRACT, BCD, 상수), `x87_transcendental`/`transcendental_kernels`/`wide_float`(초월함수 여덟: 66비트 Pi의 정수 축소, binary128 급수, 따로 든 지수와 오차 부호로 한 번 반올림, #25). 디코드를 모르므로 번역 백엔드의 helper로 재사용 | 1 |
 | `src/translate/ir/` | x86 블록을 IR로. 플래그는 명시적 값, 죽은 플래그 제거 | 3 |
 | `src/translate/wasm/` | IR을 wasm 모듈 바이트열로. 인스턴스화는 호스트 JS | 3 |
 | `src/translate/aarch64/` | IR을 AArch64 기계어로. 코드 캐시는 `CodeCacheServices` | 5 |
-| `tests/host/<os>/` | 호스트 CPU 대조 fuzz(x86 호스트에서만). **[구현됨]** `linux/x87_fuzz.cpp`(x87, [가이드](docs/guides/x87-host-fuzz.md)), `linux/int_fuzz.cpp`(32비트 정수, i386 프로세스의 TF 단일 스텝, [가이드](docs/guides/integer-host-fuzz-and-traces.md)). 둘 다 `--record`로 trace를 쓴다 | 1 |
+| `tests/host/<os>/` | 호스트 CPU 대조 fuzz(x86 호스트에서만). **[구현됨]** `linux/x87_fuzz.cpp`(x87, 초월함수는 ulp 허용치 판정과 `--dump`, [가이드](docs/guides/x87-host-fuzz.md)), `linux/int_fuzz.cpp`(32비트 정수, i386 프로세스의 TF 단일 스텝, [가이드](docs/guides/integer-host-fuzz-and-traces.md)). 둘 다 `--record`로 trace를 쓴다 | 1 |
 | `src/trace/` | **[구현됨]** trace 형식(리틀 엔디안 바이너리, `RX86TRC1`)과 재생(`trace::Replay`: 공개 계약만으로 코어를 돌려 기록된 기대값과 비교). 코어 밖의 내부 라이브러리 `rex86_trace_format`(#22 결정 5) | 1 |
 | `src/tools/trace/` | **[구현됨]** `rex86_trace`: 파일 재생과 `--dump N`. 모든 호스트(wasm32는 `-sNODERAWFS`)에서 빌드 | 1 |
-| `tests/traces/` | **[구현됨]** 고정 시드 trace 묶음 `int32.rxt`(정수 12,000건), `x87.rxt`(x87 2,587건). 기대값은 Intel 호스트 CPU가 만들었고 다섯 호스트의 ctest가 재생한다 | 1 |
+| `tests/traces/` | **[구현됨]** 고정 시드 trace 묶음 `int32.rxt`(정수 12,000건), `x87.rxt`(x87 2,587건), `x87_transcendental.rxt`(초월함수 1,850건, #25). 기대값은 Intel 호스트 CPU가 만들었고 다섯 호스트의 ctest가 재생한다 | 1 |
 | `src/tools/census/` | **[구현됨]** 독립 census: 평탄 이미지 + 진입점, 재귀 하강 하한과 선형 스윕 상한. [가이드](docs/guides/instruction-census.md) | 1 |
 | `src/tools/sst/` | **[구현됨]** SingleStepTests/80386(MIT) 러너. MOO v1.1 파서, 디코더 검증, 인터프리터 실행 비교(real mode limit 0xFFFF, 예외와 소프트웨어 인터럽트는 하네스가 IVT 전달을 흉내, #17). [가이드](docs/guides/singlesteptests.md) | 1 |
 | `third_party/zydis/` | **[구현됨]** Zydis v4.1.1 amalgamation(MIT), `rex86_zydis` STATIC, 코어에 PRIVATE 링크 | 1 |
@@ -87,7 +87,7 @@ flowchart TB
 | `rex86_softfloat` | STATIC | Berkeley SoftFloat 3e(C, 8086 specialization). 경고 타깃 미적용, 코어에 PRIVATE 링크 |
 | `rex86_trace_format` | STATIC | trace 형식과 재생(`src/trace/`). 코어의 공개 계약만 사용 |
 | `rex86_trace` | 실행 파일 | trace 재생 도구. `tests/traces/*.rxt` 재생이 ctest(`rex86_trace_corpus`)로 모든 호스트에 등록 |
-| `rex86_x87_fuzz` | 실행 파일 | x87 호스트 CPU 대조 fuzz. x86/x86-64 Linux에서만, 짧은 고정 시드로 ctest 등록 |
+| `rex86_x87_fuzz` | 실행 파일 | x87 호스트 CPU 대조 fuzz. x86/x86-64 Linux에서만, 짧은 고정 시드로 ctest 등록. 초월함수의 정확한 반올림은 `--dump`와 `scripts/x87_transcendental_oracle.py`(Python 3, 외부 패키지 없음)로 따로 확인(#25) |
 | `rex86_int_fuzz` | 실행 파일 | 32비트 정수 호스트 CPU 대조 fuzz. i386 Linux 프로세스에서만(`CMAKE_SIZEOF_VOID_P` 4), 짧은 고정 시드로 ctest 등록 |
 | `rex86_census` | 실행 파일 | 명령 census 도구. Emscripten에서는 빌드하지 않음 |
 | `rex86_sst` | 실행 파일 | SingleStepTests 러너. Emscripten 제외, `REX86_SST_DIR`로 ctest 등록 |
