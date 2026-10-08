@@ -61,6 +61,7 @@
     { "name": "linux-x86-debug", "configurePreset": "linux-x86-debug" },
     { "name": "linux-arm64-debug", "configurePreset": "linux-arm64-debug" },
     { "name": "windows-x86-debug", "configurePreset": "windows-x86-debug", "configuration": "Debug" },
+    { "name": "windows-x86-release", "configurePreset": "windows-x86-debug", "configuration": "Release" },
     { "name": "web-wasm-release", "configurePreset": "web-wasm-release" }
   ],
   "testPresets": [
@@ -69,6 +70,7 @@
     { "name": "linux-x86-debug", "configurePreset": "linux-x86-debug", "output": { "outputOnFailure": true } },
     { "name": "linux-arm64-debug", "configurePreset": "linux-arm64-debug", "output": { "outputOnFailure": true } },
     { "name": "windows-x86-debug", "configurePreset": "windows-x86-debug", "configuration": "Debug", "output": { "outputOnFailure": true } },
+    { "name": "windows-x86-release", "configurePreset": "windows-x86-debug", "configuration": "Release", "output": { "outputOnFailure": true } },
     { "name": "web-wasm-release", "configurePreset": "web-wasm-release", "output": { "outputOnFailure": true } }
   ]
 }

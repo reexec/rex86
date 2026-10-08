@@ -62,6 +62,7 @@ flowchart TB
 | `tests/host/<os>/` | 호스트 CPU 대조 fuzz(x86 호스트에서만). **[구현됨]** `linux/x87_fuzz.cpp`(x87, 초월함수는 ulp 허용치 판정과 `--dump`, [가이드](docs/guides/x87-host-fuzz.md)), `linux/int_fuzz.cpp`(32비트 정수, i386 프로세스의 TF 단일 스텝, [가이드](docs/guides/integer-host-fuzz-and-traces.md)). 둘 다 `--record`로 trace를 쓴다 | 1 |
 | `src/trace/` | **[구현됨]** trace 형식(리틀 엔디안 바이너리, `RX86TRC1`)과 재생(`trace::Replay`: 공개 계약만으로 코어를 돌려 기록된 기대값과 비교). 코어 밖의 내부 라이브러리 `rex86_trace_format`(#22 결정 5) | 1 |
 | `src/tools/trace/` | **[구현됨]** `rex86_trace`: 파일 재생과 `--dump N`. 모든 호스트(wasm32는 `-sNODERAWFS`)에서 빌드 | 1 |
+| `src/tools/bench/` | **[구현됨]** `rex86_bench`: 벤치마크 하네스(#27). 바이트 어셈블러(`asm`), 합성 커널 다섯(`alu`, `memory`, `call`, `string`, `x87`)과 혼합 워크로드, C++ 참조 모델(`workloads`), 프레임 루프와 통계(`runner`). 공개 계약만 쓰므로 모든 엔진을 같은 길로 잰다. MIPS, 프레임 시간 p50/p99/최대, 첫 프레임, 기판 넷의 실시간 비율(IPC 가정)을 보고. [가이드](docs/guides/benchmark.md), [측정 기록](docs/analysis/interpreter-performance.md) | — |
 | `tests/traces/` | **[구현됨]** 고정 시드 trace 묶음 `int32.rxt`(정수 12,000건), `x87.rxt`(x87 2,587건), `x87_transcendental.rxt`(초월함수 1,850건, #25). 기대값은 Intel 호스트 CPU가 만들었고 다섯 호스트의 ctest가 재생한다 | 1 |
 | `src/tools/census/` | **[구현됨]** 독립 census: 평탄 이미지 + 진입점, 재귀 하강 하한과 선형 스윕 상한. [가이드](docs/guides/instruction-census.md) | 1 |
 | `src/tools/sst/` | **[구현됨]** SingleStepTests/80386(MIT) 러너. MOO v1.1 파서, 디코더 검증, 인터프리터 실행 비교(real mode limit 0xFFFF, 예외와 소프트웨어 인터럽트는 하네스가 IVT 전달을 흉내, #17). [가이드](docs/guides/singlesteptests.md) | 1 |
@@ -89,6 +90,8 @@ flowchart TB
 | `rex86_trace` | 실행 파일 | trace 재생 도구. `tests/traces/*.rxt` 재생이 ctest(`rex86_trace_corpus`)로 모든 호스트에 등록 |
 | `rex86_x87_fuzz` | 실행 파일 | x87 호스트 CPU 대조 fuzz. x86/x86-64 Linux에서만, 짧은 고정 시드로 ctest 등록. 초월함수의 정확한 반올림은 `--dump`와 `scripts/x87_transcendental_oracle.py`(Python 3, 외부 패키지 없음)로 따로 확인(#25) |
 | `rex86_int_fuzz` | 실행 파일 | 32비트 정수 호스트 CPU 대조 fuzz. i386 Linux 프로세스에서만(`CMAKE_SIZEOF_VOID_P` 4), 짧은 고정 시드로 ctest 등록 |
+| `rex86_bench_lib` | STATIC | 벤치마크 하네스의 어셈블러, 워크로드, 프레임 루프(`src/tools/bench/`). 단위 테스트가 링크 |
+| `rex86_bench` | 실행 파일 | 벤치마크 하네스. 모든 호스트에서 빌드(wasm32는 `-sNODERAWFS`), 첫 줄에 `$<CONFIG>`를 적음. `--smoke`가 ctest(`rex86_bench_smoke`)로 모든 호스트에 등록 |
 | `rex86_census` | 실행 파일 | 명령 census 도구. Emscripten에서는 빌드하지 않음 |
 | `rex86_sst` | 실행 파일 | SingleStepTests 러너. Emscripten 제외, `REX86_SST_DIR`로 ctest 등록 |
 
