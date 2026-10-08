@@ -9,10 +9,12 @@
 // which means the same on i386 and x86-64 (no REX: [edi]/[esi]/[ebx] are
 // [rdi]/[rsi]/[rbx] in 64-bit mode). Memory operands are [ebx].
 //
-// Usage: rex86_x87_fuzz [iterations] [seed] [--verbose]
+// Usage: rex86_x87_fuzz [iterations] [seed] [--verbose] [--record FILE]
 //        rex86_x87_fuzz --replay <code hex> <image hex> <data hex> <flags hex>
 // The replay form runs one case (as a MISMATCH line prints it) and dumps
-// both sides.
+// both sides. --record writes every matching case as a trace (design #22,
+// decision 5), replayed on the spot as a check of the recording itself;
+// vendor deviations are left out, since a trace holds one expectation.
 
 #if !defined(__linux__) || !(defined(__x86_64__) || defined(__i386__))
 #error "the x87 host comparison runs on x86 or x86-64 Linux only"
@@ -34,6 +36,8 @@
 #include "rex86/cpu.h"
 #include "rex86/environment.h"
 #include "rex86/guest_memory.h"
+#include "trace/replay.h"
+#include "trace/trace_format.h"
 
 namespace
 {
@@ -532,6 +536,34 @@ bool UnmaskedInvalidCompareFlags(const std::string& mnemonic, const Input& input
     return Difference(host, patched).empty();
 }
 
+// The second known vendor deviation: when FPREM/FPREM1 (x rem inf) or
+// FSCALE (by 0) return a denormal ST(0) unchanged, as the SDM tables say,
+// with #U unmasked, the AMD Zen 3 raises #U and stores the bias-adjusted
+// value; the Intel Cascade Lake returns ST(0) without #U, which the core
+// follows (#22).
+bool PassThroughUnderflow(const std::string& mnemonic, const Input& input,
+                          const Outcome& host, const Outcome& core)
+{
+    const std::string base = mnemonic.substr(0, mnemonic.find(' '));
+    if ((base != "fprem" && base != "fprem1" && base != "fscale") ||
+        (input.image[0] & 0x10u) != 0 || (host.image[4] & 0x10u) == 0 ||
+        (core.image[4] & 0x10u) != 0)
+    {
+        return false;  // another instruction, #U masked, or no #U on the host
+    }
+    Outcome patched = core;
+    std::memcpy(patched.image + 4, host.image + 4, 2);   // SW
+    std::memcpy(patched.image + 8, host.image + 8, 2);   // TW
+    std::memcpy(patched.image + 28, host.image + 28, 10);  // ST(0)
+    const std::uint16_t sw_diff = static_cast<std::uint16_t>(
+        (host.image[4] | (host.image[5] << 8)) ^ (core.image[4] | (core.image[5] << 8)));
+    if ((sw_diff & ~0x8090u) != 0)
+    {
+        return false;  // something besides B, ES and UE differs
+    }
+    return Difference(host, patched).empty();
+}
+
 std::vector<std::uint8_t> FromHex(const char* text)
 {
     std::vector<std::uint8_t> bytes;
@@ -584,6 +616,59 @@ int Replay(char** argv)
     return 0;
 }
 
+// The CoreRunner layout as a trace case: the host's outcome is the
+// expectation. The flags travel in EDX, compared on OF SF ZF AF PF CF as
+// Difference does; FIP/FCS/FOP/FDP/FDS and the stack slot are not compared.
+rex86::trace::Case BuildCase(const Input& input, const unsigned memory_size,
+                             const Outcome& host)
+{
+    namespace trace = rex86::trace;
+    trace::Case c;
+    c.kind = trace::CaseKind::kX87;
+    c.mode = trace::RunMode::kUntilHalt;
+    c.budget = 16;
+    c.features = trace::kFeatureX87 | trace::kFeatureCmov;
+    c.regions = {{CoreRunner::kCode, CoreRunner::kStack - CoreRunner::kCode,
+                  static_cast<std::uint8_t>(rex86::kPageReadWriteExecute)}};
+    c.fill_seed = input.eax ^ input.flags;
+    c.patches = {{CoreRunner::kCode, Stub(input.code, 0xF4)},
+                 {CoreRunner::kIn, std::vector<std::uint8_t>(input.image, input.image + kImageSize)},
+};
+    // Only the memory operand's bytes are input; FNSAVE writes the whole
+    // output image, so its initial contents do not matter.
+    if (memory_size != 0)
+    {
+        c.patches.push_back({CoreRunner::kData,
+                             std::vector<std::uint8_t>(input.data, input.data + memory_size)});
+    }
+    c.input.gpr = {input.eax, 0, input.flags, CoreRunner::kData,
+                   CoreRunner::kStack, 0, CoreRunner::kOut, CoreRunner::kIn};
+    c.input.eip = CoreRunner::kCode;
+    c.input.eflags = rex86::CpuState{}.eflags;
+    c.reason = static_cast<std::uint8_t>(rex86::StopReason::kHalted);
+    c.expected.gpr = c.input.gpr;
+    c.expected.gpr[0] = host.eax;
+    c.expected.gpr[2] = (host.flags & 0x8D5u) | (input.flags & ~0x8D5u);
+    c.gpr_mask = 0xFFu;
+    c.eflags_mask = 0;
+    c.diffs = {{CoreRunner::kOut, std::vector<std::uint8_t>(host.image, host.image + kImageSize)}};
+    for (unsigned i = 0; i < kDataSize;)
+    {
+        if (host.data[i] == input.data[i])
+        {
+            ++i;
+            continue;
+        }
+        unsigned end = i;
+        while (end < kDataSize && host.data[end] != input.data[end]) ++end;
+        c.diffs.push_back({CoreRunner::kData + i,
+                           std::vector<std::uint8_t>(host.data + i, host.data + end)});
+        i = end;
+    }
+    c.ignores = {{CoreRunner::kOut + 12, 16}, {CoreRunner::kStack - 4, 4}};
+    return c;
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -595,12 +680,17 @@ int main(int argc, char** argv)
     std::uint64_t iterations = 20000;
     std::uint64_t seed = 1;
     bool verbose = false;
+    std::string record_path;
     int positional = 0;
     for (int i = 1; i < argc; ++i)
     {
         if (std::strcmp(argv[i], "--verbose") == 0)
         {
             verbose = true;
+        }
+        else if (std::strcmp(argv[i], "--record") == 0 && i + 1 < argc)
+        {
+            record_path = argv[++i];
         }
         else if (positional++ == 0)
         {
@@ -616,6 +706,13 @@ int main(int argc, char** argv)
     Generator gen(seed);
     HostRunner host;
     CoreRunner core;
+    rex86::trace::Writer record;
+    std::string error;
+    if (!record_path.empty() && !record.Open(record_path, &error))
+    {
+        std::fprintf(stderr, "%s\n", error.c_str());
+        return 2;
+    }
     std::map<std::string, std::uint64_t> failures;
     std::uint64_t mismatches = 0;
     std::uint64_t core_stops = 0;
@@ -634,6 +731,7 @@ int main(int argc, char** argv)
         rex86::Event event;
         const Outcome actual = core.Run(input, &event);
         std::string difference;
+        bool deviation = false;
         if (event.reason != rex86::StopReason::kHalted)
         {
             ++core_stops;
@@ -644,11 +742,23 @@ int main(int argc, char** argv)
         {
             difference = Difference(expected, actual);
             if (!difference.empty() &&
-                UnmaskedInvalidCompareFlags(form.mnemonic, input, expected, actual))
+                (UnmaskedInvalidCompareFlags(form.mnemonic, input, expected, actual) ||
+                 PassThroughUnderflow(form.mnemonic, input, expected, actual)))
             {
                 ++vendor_deviations;
                 difference.clear();
+                deviation = true;
             }
+        }
+        if (difference.empty() && !deviation && !record_path.empty())
+        {
+            const rex86::trace::Case c = BuildCase(input, form.memory_size, expected);
+            const rex86::trace::ReplayResult replayed = rex86::trace::Replay(c);
+            if (!replayed.matched)
+            {
+                difference = "recorded case does not replay: " + replayed.difference;
+            }
+            record.Add(c);
         }
         if (!difference.empty())
         {
@@ -662,6 +772,10 @@ int main(int argc, char** argv)
                             Hex(input.data, kDataSize).c_str(), input.flags);
             }
         }
+    }
+    if (!record_path.empty())
+    {
+        record.Close();
     }
     std::printf("forms=%zu iterations=%llu seed=%llu mismatches=%llu core_stops=%llu "
                 "vendor_deviations=%llu\n",

@@ -231,12 +231,14 @@ ExecStatus ExecuteStrings(Ctx* ctx, Event* stop_event)
         {
             std::uint32_t lhs = 0;
             std::uint32_t rhs = 0;
-            if (!ReadVirtual(ctx, source_segment,
-                             ReadIndex(s, Gpr::kEsi, address_mask), width,
-                             &lhs) ||
-                !ReadVirtual(ctx, Segment::kEs,
+            // ES:(E)DI is read first: when both sides fault, the host CPU
+            // reports the destination (measured by the integer host fuzz).
+            if (!ReadVirtual(ctx, Segment::kEs,
                              ReadIndex(s, Gpr::kEdi, address_mask), width,
-                             &rhs))
+                             &rhs) ||
+                !ReadVirtual(ctx, source_segment,
+                             ReadIndex(s, Gpr::kEsi, address_mask), width,
+                             &lhs))
             {
                 return ExecStatus::kFault;
             }

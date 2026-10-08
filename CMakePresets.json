@@ -24,6 +24,7 @@
       "binaryDir": "${sourceDir}/build/linux-x86-debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_FLAGS": "-m32",
         "CMAKE_CXX_FLAGS": "-m32",
         "CMAKE_EXE_LINKER_FLAGS": "-m32",
         "REX86_BUILD_TESTS": "ON"

@@ -12,10 +12,12 @@
 namespace rex86::interp
 {
 
-// EFLAGS bits POPF, IRET and SAHF-style loads may change. Reserved bit 1
-// stays set, and the system bits a user-mode core does not model (RF,
-// VM) stay off.
-inline constexpr std::uint32_t kEflagsPopWritable = 0x00007FD5u;
+// EFLAGS bits POPF and IRET may change. Reserved bit 1 stays set, and the
+// system bits a user-mode core does not model (RF, VM, VIF, VIP) stay off.
+// AC (bit 18) and ID (bit 21) are writable as on every CPU after the 386:
+// guest CPU detection toggles them to find a 486 and CPUID (design #21,
+// decision 3). Alignment checking (#AC) is not modeled.
+inline constexpr std::uint32_t kEflagsPopWritable = 0x00247FD5u;
 
 constexpr std::uint32_t WidthMask(const unsigned width_bits)
 {
