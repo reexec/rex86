@@ -419,7 +419,8 @@ private:
             static const std::uint8_t kSegments[] = {0x26, 0x2E, 0x36, 0x3E, 0x64};
             prefixes.push_back(kSegments[random_.Below(5)]);
         }
-        if (random_.Chance(12)) prefixes.push_back(random_.Chance(70) ? 0xF3 : 0xF2);
+        const bool rep_prefix = random_.Chance(12);
+        if (rep_prefix) prefixes.push_back(random_.Chance(70) ? 0xF3 : 0xF2);
         if (random_.Chance(6)) prefixes.push_back(0xF0);
         for (std::size_t i = prefixes.size(); i > 1; --i)
         {
@@ -442,6 +443,17 @@ private:
             return false;
         }
         input->code.resize(input->decoded.Length());
+        // F2/F3 on anything but a string instruction is reserved and "may
+        // cause unpredictable behavior" (SDM Vol. 2, 2.1.1); hosts do
+        // differ (F3 LOOPNE on the CI runner). PAUSE, F3 90, is the one
+        // architected use.
+        if (rep_prefix &&
+            (input->decoded.instruction.attributes &
+             (ZYDIS_ATTRIB_HAS_REP | ZYDIS_ATTRIB_HAS_REPE | ZYDIS_ATTRIB_HAS_REPNE)) == 0 &&
+            input->decoded.instruction.mnemonic != ZYDIS_MNEMONIC_PAUSE)
+        {
+            return false;
+        }
 
         for (std::uint32_t& value : input->gpr)
         {

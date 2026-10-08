@@ -128,6 +128,11 @@ if(REX86_BUILD_TESTS)
     target_include_directories(rex86_trace_format PUBLIC src)
     target_link_libraries(rex86_trace_format
         PUBLIC rex86::core PRIVATE rex86_warnings)
+    if(MSVC)
+        # std::fopen is the portable C++ API; MSVC's C4996 would steer it
+        # to the non-standard fopen_s.
+        target_compile_definitions(rex86_trace_format PRIVATE _CRT_SECURE_NO_WARNINGS)
+    endif()
 
     add_executable(rex86_unit_tests
         tests/unit/main.cpp

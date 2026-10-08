@@ -82,6 +82,7 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends
           ca-certificates git cmake ninja-build g++ make;
           git config --global --add safe.directory "*";
+          grep -m1 "model name" /proc/cpuinfo;
           cmake --preset linux-x86-debug -DREX86_WARNINGS_AS_ERRORS=ON;
           cmake --build --preset linux-x86-debug;
           ctest --preset linux-x86-debug'
