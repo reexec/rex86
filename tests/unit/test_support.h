@@ -68,5 +68,7 @@ void RunX87TranscendentalTests(rex86::test::Context& context);
 void RunPost386Tests(rex86::test::Context& context);
 void RunTraceTests(rex86::test::Context& context);
 void RunBenchTests(rex86::test::Context& context);
+void RunMmxTests(rex86::test::Context& context);
+void RunSseTests(rex86::test::Context& context);
 
 #endif  // REX86_TESTS_UNIT_TEST_SUPPORT_H_

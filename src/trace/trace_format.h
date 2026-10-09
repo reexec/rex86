@@ -28,6 +28,7 @@ enum class CaseKind : std::uint8_t
 {
     kInteger32 = 1,  // one integer instruction in 32-bit flat code
     kX87 = 2,        // the x87 fuzz's stub, run until HLT
+    kSimd = 3,       // the SIMD fuzz's FXRSTOR/FXSAVE stub, run until HLT
 };
 
 enum class RunMode : std::uint8_t
@@ -47,6 +48,7 @@ inline constexpr std::uint32_t kFeatureSse = 1u << 2;
 inline constexpr std::uint32_t kFeatureSse2 = 1u << 3;
 inline constexpr std::uint32_t kFeatureSegments16 = 1u << 4;
 inline constexpr std::uint32_t kFeatureCmov = 1u << 5;
+inline constexpr std::uint32_t kFeatureFxsr = 1u << 6;
 
 struct Region
 {

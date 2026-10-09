@@ -689,6 +689,73 @@ ExecStatus Execute(Ctx* ctx, std::uint32_t* next_eip, Event* stop_event)
     }
 }
 
+// The SSE-era MMX integer instructions, which Zydis files under
+// PENTIUMMMX although the CPU needs SSE for them (design #29, decision 2).
+bool IsSseMmxInteger(const ZydisMnemonic mnemonic)
+{
+    switch (mnemonic)
+    {
+        case ZYDIS_MNEMONIC_PSHUFW: case ZYDIS_MNEMONIC_PAVGB: case ZYDIS_MNEMONIC_PAVGW:
+        case ZYDIS_MNEMONIC_PEXTRW: case ZYDIS_MNEMONIC_PINSRW: case ZYDIS_MNEMONIC_PMAXSW:
+        case ZYDIS_MNEMONIC_PMAXUB: case ZYDIS_MNEMONIC_PMINSW: case ZYDIS_MNEMONIC_PMINUB:
+        case ZYDIS_MNEMONIC_PMULHUW: case ZYDIS_MNEMONIC_PSADBW: case ZYDIS_MNEMONIC_MASKMOVQ:
+        case ZYDIS_MNEMONIC_MOVNTQ: case ZYDIS_MNEMONIC_PMOVMSKB:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool UsesMmRegister(const decode::DecodedInstruction& decoded)
+{
+    for (ZyanU8 i = 0; i < decoded.instruction.operand_count; ++i)
+    {
+        const ZydisDecodedOperand& op = decoded.operands[i];
+        if (op.type == ZYDIS_OPERAND_TYPE_REGISTER && op.reg.value >= ZYDIS_REGISTER_MM0 &&
+            op.reg.value <= ZYDIS_REGISTER_MM7)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// A disabled feature's instruction is an illegal instruction, per the
+// Features contract. RTM (XBEGIN/XABORT, which reuse the C7/C6 /7
+// encodings) is never part of this core's CPU and raises #UD as on every
+// processor without it.
+bool FeatureEnabled(const decode::DecodedInstruction& decoded, const Features& features)
+{
+    const ZydisISASet isa = decoded.instruction.meta.isa_set;
+    switch (isa)
+    {
+        case ZYDIS_ISA_SET_RTM:
+            return false;
+        case ZYDIS_ISA_SET_X87:
+            return features.x87;
+        case ZYDIS_ISA_SET_FCMOV:
+        case ZYDIS_ISA_SET_FCOMI:
+            return features.x87 && features.cmov;
+        case ZYDIS_ISA_SET_CMOV:
+            return features.cmov;
+        case ZYDIS_ISA_SET_PENTIUMMMX:
+            return features.mmx &&
+                (!IsSseMmxInteger(decoded.instruction.mnemonic) || features.sse);
+        case ZYDIS_ISA_SET_SSE:
+            return features.sse && (features.mmx || !UsesMmRegister(decoded));
+        case ZYDIS_ISA_SET_SSEMXCSR:
+        case ZYDIS_ISA_SET_SSE_PREFETCH:
+            return features.sse;
+        case ZYDIS_ISA_SET_FXSAVE:
+            return features.fxsr;
+        case ZYDIS_ISA_SET_SSE2:
+        case ZYDIS_ISA_SET_SSE2MMX:
+            return features.sse2;
+        default:
+            return true;
+    }
+}
+
 }  // namespace
 
 StepResult Step(CpuState& state, GuestMemory& memory,
@@ -752,22 +819,7 @@ StepResult Step(CpuState& state, GuestMemory& memory,
         return result;
     }
 
-    // A disabled feature's instruction is an illegal instruction, per the
-    // Features contract. RTM (XBEGIN/XABORT, which reuse the C7/C6 /7
-    // encodings) is never part of this core's CPU and raises #UD as on
-    // every processor without it.
-    const ZydisISASet isa = decoded.instruction.meta.isa_set;
-    if (isa == ZYDIS_ISA_SET_RTM ||
-        ((isa == ZYDIS_ISA_SET_X87 || isa == ZYDIS_ISA_SET_FCMOV ||
-          isa == ZYDIS_ISA_SET_FCOMI) &&
-         !features.x87) ||
-        ((isa == ZYDIS_ISA_SET_CMOV || isa == ZYDIS_ISA_SET_FCMOV ||
-          isa == ZYDIS_ISA_SET_FCOMI) &&
-         !features.cmov) ||
-        (isa == ZYDIS_ISA_SET_PENTIUMMMX && !features.mmx) ||
-        (isa == ZYDIS_ISA_SET_SSE && !features.sse) ||
-        ((isa == ZYDIS_ISA_SET_SSE2 || isa == ZYDIS_ISA_SET_SSE2MMX) &&
-         !features.sse2))
+    if (!FeatureEnabled(decoded, features))
     {
         result.status = StepStatus::kFaulted;
         result.event.reason = StopReason::kFault;
@@ -785,6 +837,7 @@ StepResult Step(CpuState& state, GuestMemory& memory,
     const std::array<SegmentRegister, 6> saved_segments = state.segments;
 
     Ctx ctx{state, memory, environment, decoded, Event{}, false};
+    ctx.features = &features;
     const std::uint32_t fallthrough = start_offset + decoded.Length();
     std::uint32_t next_eip = fallthrough;
     Event stop_event;

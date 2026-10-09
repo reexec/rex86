@@ -62,6 +62,9 @@ enum class FaultKind : std::uint8_t
     // An unmasked x87 exception pending at a waiting x87 instruction (#MF,
     // interrupt 16). The status word says which; the handler clears it.
     kFloatingPoint,
+    // An unmasked SSE floating-point exception (#XM, interrupt 19). MXCSR
+    // says which; the handler clears it (design #29, decision 6).
+    kSimdFloatingPoint,
     kOther,
 };
 
@@ -97,8 +100,10 @@ struct Descriptor
     bool default_32bit = true;
 };
 
-// Features the host enables. Everything is off until an engine implements
-// it; an instruction of a disabled feature faults with kIllegalInstruction.
+// Features the host enables. The defaults are the implemented ceiling of the
+// target boards' CPUs; a consumer turns off what the board it emulates
+// lacks, and an instruction of a disabled feature faults with
+// kIllegalInstruction (design #21, decision 2).
 struct Features
 {
     bool x87 = true;
@@ -107,8 +112,19 @@ struct Features
     // K6-2 (EZ2DJ generation 1), which a consumer emulates by turning this
     // off (design #21, decision 2).
     bool cmov = true;
-    bool mmx = false;
-    bool sse = false;
+    // CPUID.01H:EDX.MMX: the MMX instructions on the x87 registers. Every
+    // target board's CPU has them (design #29, decision 1).
+    bool mmx = true;
+    // CPUID.01H:EDX.FXSR: FXSAVE and FXRSTOR. The P6 boards have them, the
+    // K6-2 does not. Without sse they leave the MXCSR and XMM fields alone.
+    bool fxsr = true;
+    // CPUID.01H:EDX.SSE: the Pentium III's SSE, MXCSR included, and the MMX
+    // integer instructions it added (PSHUFW, PAVGB, ...). The MK5 and
+    // generation 2 EZ2DJ boards have it; a consumer emulating the MK3 or the
+    // K6-2 turns it off (design #29, decisions 1 and 2).
+    bool sse = true;
+    // Out of scope (no target board has it): stays off, and its
+    // instructions raise #UD.
     bool sse2 = false;
     // D/B = 0 code and stack segments (16-bit default width), which rePIU's
     // DOS/4GW paths use.

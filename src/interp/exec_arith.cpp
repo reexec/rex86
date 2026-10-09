@@ -824,6 +824,21 @@ ExecStatus ExecuteExtended(Ctx* ctx, std::uint32_t* next_eip,
     {
         return status;
     }
+    status = ExecuteFxsave(ctx);
+    if (status != ExecStatus::kUnimplemented)
+    {
+        return status;
+    }
+    status = ExecuteSse(ctx);
+    if (status != ExecStatus::kUnimplemented)
+    {
+        return status;
+    }
+    status = ExecuteMmx(ctx);
+    if (status != ExecStatus::kUnimplemented)
+    {
+        return status;
+    }
     return ExecuteBcd(ctx);
 }
 

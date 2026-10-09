@@ -70,8 +70,15 @@ void RunCpuTests(rex86::test::Context& context)
     REX86_CHECK(context, cpu.memory() == &memory);
     REX86_CHECK(context, cpu.environment() == &environment);
     REX86_CHECK(context, cpu.code_cache() == nullptr);
+    // The defaults are the target boards' ceiling (design #29, decision 1):
+    // P6 + MMX + FXSR + SSE, without SSE2.
     REX86_CHECK(context, cpu.features().x87);
-    REX86_CHECK(context, !cpu.features().sse);
+    REX86_CHECK(context, cpu.features().cmov);
+    REX86_CHECK(context, cpu.features().mmx);
+    REX86_CHECK(context, cpu.features().fxsr);
+    REX86_CHECK(context, cpu.features().sse);
+    REX86_CHECK(context, !cpu.features().sse2);
+    REX86_CHECK_EQ(context, cpu.state().sse.mxcsr, 0x1F80u);
 
     // The pages start unmapped, so the first fetch faults: an explicit
     // fault event, not an imitated success, and nothing retires.

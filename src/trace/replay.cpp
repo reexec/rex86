@@ -55,6 +55,7 @@ Features ToFeatures(const std::uint32_t bits)
     features.sse2 = (bits & kFeatureSse2) != 0;
     features.segments_16bit = (bits & kFeatureSegments16) != 0;
     features.cmov = (bits & kFeatureCmov) != 0;
+    features.fxsr = (bits & kFeatureFxsr) != 0;
     return features;
 }
 
