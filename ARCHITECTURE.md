@@ -63,6 +63,7 @@ flowchart TB
 | `src/trace/` | **[구현됨]** trace 형식(리틀 엔디안 바이너리, `RX86TRC1`)과 재생(`trace::Replay`: 공개 계약만으로 코어를 돌려 기록된 기대값과 비교). 코어 밖의 내부 라이브러리 `rex86_trace_format`(#22 결정 5) | 1 |
 | `src/tools/trace/` | **[구현됨]** `rex86_trace`: 파일 재생과 `--dump N`. 모든 호스트(wasm32는 `-sNODERAWFS`)에서 빌드 | 1 |
 | `src/tools/bench/` | **[구현됨]** `rex86_bench`: 벤치마크 하네스(#27). 바이트 어셈블러(`asm`), 합성 커널 다섯(`alu`, `memory`, `call`, `string`, `x87`)과 혼합 워크로드, C++ 참조 모델(`workloads`), 프레임 루프와 통계(`runner`). 공개 계약만 쓰므로 모든 엔진을 같은 길로 잰다. MIPS, 프레임 시간 p50/p99/최대, 첫 프레임, 기판 넷의 실시간 비율(IPC 가정)을 보고. [가이드](docs/guides/benchmark.md), [측정 기록](docs/analysis/interpreter-performance.md) | — |
+| `src/tools/robust/` | **[구현됨]** `rex86_robust`: 견고성 하네스(#31). 보호 구역으로 둘러싼 임의 메모리, 임의 페이지 속성, 상태, 기능, 임의로 답하는 호스트로 코어를 돌리고 불변식(크래시 없음, 버퍼 밖과 쓰기 금지 페이지 불변, 속성 불변, 이벤트 계약, 결정성)을 확인한다. 디코더 fuzz 포함. `libfuzzer.cpp`는 `REX86_LIBFUZZER`(Clang) 진입점. [가이드](docs/guides/robustness-fuzz.md), [기록](docs/analysis/robustness-fuzz.md) | — |
 | `tests/traces/` | **[구현됨]** 고정 시드 trace 묶음 `int32.rxt`(정수 12,000건), `x87.rxt`(x87 2,587건), `x87_transcendental.rxt`(초월함수 1,850건, #25), `simd.rxt`(MMX/SSE, #29). 기대값은 Intel 호스트 CPU가 만들었고 다섯 호스트의 ctest가 재생한다 | 1 |
 | `src/tools/census/` | **[구현됨]** 독립 census: 평탄 이미지 + 진입점, 재귀 하강 하한과 선형 스윕 상한. [가이드](docs/guides/instruction-census.md) | 1 |
 | `src/tools/sst/` | **[구현됨]** SingleStepTests/80386(MIT) 러너. MOO v1.1 파서, 디코더 검증, 인터프리터 실행 비교(real mode limit 0xFFFF, 예외와 소프트웨어 인터럽트는 하네스가 IVT 전달을 흉내, #17). [가이드](docs/guides/singlesteptests.md) | 1 |
@@ -93,12 +94,15 @@ flowchart TB
 | `rex86_int_fuzz` | 실행 파일 | 32비트 정수 호스트 CPU 대조 fuzz. i386 Linux 프로세스에서만(`CMAKE_SIZEOF_VOID_P` 4), 짧은 고정 시드로 ctest 등록 |
 | `rex86_bench_lib` | STATIC | 벤치마크 하네스의 어셈블러, 워크로드, 프레임 루프(`src/tools/bench/`). 단위 테스트가 링크 |
 | `rex86_bench` | 실행 파일 | 벤치마크 하네스. 모든 호스트에서 빌드(wasm32는 `-sNODERAWFS`), 첫 줄에 `$<CONFIG>`를 적음. `--smoke`가 ctest(`rex86_bench_smoke`)로 모든 호스트에 등록 |
+| `rex86_robust_lib` | STATIC | 견고성 하네스의 케이스 생성과 불변식(`src/tools/robust/`). 단위 테스트가 링크 |
+| `rex86_robust` | 실행 파일 | 견고성 하네스 드라이버. 모든 호스트에서 빌드, `--cases 300`이 ctest(`rex86_robust_smoke`)로 모든 호스트와 새니타이저 작업에서 돈다 |
+| `rex86_robust_libfuzzer` | 실행 파일 | `REX86_LIBFUZZER=ON`(Clang)일 때만. rex86 타깃이 `-fsanitize=fuzzer-no-link`로 계측되며, CI `linux-x64-libfuzzer`가 ASan/UBSan과 함께 60초 돌린다 |
 | `rex86_census` | 실행 파일 | 명령 census 도구. Emscripten에서는 빌드하지 않음 |
 | `rex86_sst` | 실행 파일 | SingleStepTests 러너. Emscripten 제외, `REX86_SST_DIR`로 ctest 등록 |
 
-`REX86_BUILD_TESTS`는 최상위 프로젝트일 때만 기본 ON이므로 FetchContent 소비자는 라이브러리만 받는다. CI는 Windows x86(MSVC), Linux x64(GCC, Clang), Linux i386(Debian 컨테이너), Linux AArch64(`ubuntu-24.04-arm`), wasm32(Emscripten, Node)의 다섯 호스트와, Linux x64의 ASan/UBSan 작업(`linux-x64-sanitize`, GCC)이 모든 브랜치 push에서 돈다.
+`REX86_BUILD_TESTS`는 최상위 프로젝트일 때만 기본 ON이므로 FetchContent 소비자는 라이브러리만 받는다. CI는 Windows x86(MSVC), Linux x64(GCC, Clang), Linux i386(Debian 컨테이너), Linux AArch64(`ubuntu-24.04-arm`), wasm32(Emscripten, Node)의 다섯 호스트와, Linux x64의 ASan/UBSan 작업(`linux-x64-sanitize`, GCC), Clang libFuzzer 작업(`linux-x64-libfuzzer`, #31)이 모든 브랜치 push에서 돈다.
 
-*`REX86_BUILD_TESTS` defaults to ON only for the top-level project, so a FetchContent consumer gets the library alone. CI runs the five hosts plus an ASan/UBSan job on Linux x64 (`linux-x64-sanitize`, GCC) on every branch push.*
+*`REX86_BUILD_TESTS` defaults to ON only for the top-level project, so a FetchContent consumer gets the library alone. CI runs the five hosts plus an ASan/UBSan job on Linux x64 (`linux-x64-sanitize`, GCC) and a Clang libFuzzer job (`linux-x64-libfuzzer`, #31) on every branch push.*
 
 ## 5. 갱신 규칙 / Update rules
 

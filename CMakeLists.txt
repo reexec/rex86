@@ -25,6 +25,9 @@ option(REX86_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 # Sanitizers for rex86's own targets (design #22, decision 7), for example
 # "address,undefined". third_party stays uninstrumented, as upstream wrote it.
 set(REX86_SANITIZE "" CACHE STRING "Comma-separated -fsanitize= list for rex86 targets")
+# The robustness harness's libFuzzer target (design #31, decision 3), Clang
+# only: rex86's own targets get coverage instrumentation.
+option(REX86_LIBFUZZER "Build rex86_robust_libfuzzer (Clang)" OFF)
 
 if(PROJECT_IS_TOP_LEVEL)
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
@@ -45,6 +48,9 @@ else()
         target_compile_options(rex86_warnings INTERFACE
             -fsanitize=${REX86_SANITIZE} -fno-sanitize-recover=all -fno-omit-frame-pointer)
         target_link_options(rex86_warnings INTERFACE -fsanitize=${REX86_SANITIZE})
+    endif()
+    if(REX86_LIBFUZZER)
+        target_compile_options(rex86_warnings INTERFACE -fsanitize=fuzzer-no-link)
     endif()
 endif()
 
@@ -156,6 +162,14 @@ if(REX86_BUILD_TESTS)
     target_include_directories(rex86_bench_lib PUBLIC src)
     target_link_libraries(rex86_bench_lib PUBLIC rex86::core PRIVATE rex86_warnings)
 
+    # The robustness harness (design #31): arbitrary bytes and state against
+    # the invariants that must hold for any input. Host-neutral, so it
+    # builds and runs on every host; the decoder fuzz reaches the internal
+    # decoder.
+    add_library(rex86_robust_lib STATIC src/tools/robust/robust_case.cpp)
+    target_include_directories(rex86_robust_lib PUBLIC src)
+    target_link_libraries(rex86_robust_lib PUBLIC rex86::core rex86_zydis PRIVATE rex86_warnings)
+
     add_executable(rex86_unit_tests
         tests/unit/main.cpp
         tests/unit/version_test.cpp
@@ -174,6 +188,7 @@ if(REX86_BUILD_TESTS)
         tests/unit/mmx_test.cpp
         tests/unit/sse_test.cpp
         tests/unit/sse_float_test.cpp
+        tests/unit/robust_test.cpp
         src/tools/census/census.cpp
         src/tools/sst/moo_reader.cpp
     )
@@ -183,7 +198,7 @@ if(REX86_BUILD_TESTS)
     # SoftFloat's include paths).
     target_include_directories(rex86_unit_tests PRIVATE src)
     target_link_libraries(rex86_unit_tests
-        PRIVATE rex86::core rex86_trace_format rex86_bench_lib rex86_warnings
+        PRIVATE rex86::core rex86_trace_format rex86_bench_lib rex86_robust_lib rex86_warnings
                 rex86_zydis rex86_softfloat)
 
     add_executable(rex86_probe src/tools/probe/main.cpp)
@@ -207,6 +222,14 @@ if(REX86_BUILD_TESTS)
     endif()
     if(EMSCRIPTEN)
         target_link_options(rex86_bench PRIVATE -sNODERAWFS=1)
+    endif()
+
+    add_executable(rex86_robust src/tools/robust/main.cpp)
+    target_link_libraries(rex86_robust PRIVATE rex86_robust_lib rex86_warnings)
+    if(REX86_LIBFUZZER)
+        add_executable(rex86_robust_libfuzzer src/tools/robust/libfuzzer.cpp)
+        target_link_libraries(rex86_robust_libfuzzer PRIVATE rex86_robust_lib rex86_warnings)
+        target_link_options(rex86_robust_libfuzzer PRIVATE -fsanitize=fuzzer)
     endif()
 
     file(GLOB REX86_TRACE_CORPUS CONFIGURE_DEPENDS
@@ -278,6 +301,7 @@ if(REX86_BUILD_TESTS)
         add_test(NAME rex86_unit_tests COMMAND node $<TARGET_FILE:rex86_unit_tests>)
         add_test(NAME rex86_probe COMMAND node $<TARGET_FILE:rex86_probe>)
         add_test(NAME rex86_bench_smoke COMMAND node $<TARGET_FILE:rex86_bench> --smoke)
+        add_test(NAME rex86_robust_smoke COMMAND node $<TARGET_FILE:rex86_robust> --cases 300)
         if(REX86_TRACE_CORPUS)
             add_test(NAME rex86_trace_corpus
                 COMMAND node $<TARGET_FILE:rex86_trace> ${REX86_TRACE_CORPUS})
@@ -286,6 +310,7 @@ if(REX86_BUILD_TESTS)
         add_test(NAME rex86_unit_tests COMMAND rex86_unit_tests)
         add_test(NAME rex86_probe COMMAND rex86_probe)
         add_test(NAME rex86_bench_smoke COMMAND rex86_bench --smoke)
+        add_test(NAME rex86_robust_smoke COMMAND rex86_robust --cases 300)
         if(REX86_TRACE_CORPUS)
             add_test(NAME rex86_trace_corpus COMMAND rex86_trace ${REX86_TRACE_CORPUS})
         endif()

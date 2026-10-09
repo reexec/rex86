@@ -64,6 +64,35 @@ jobs:
       - name: Test
         run: ctest --preset linux-x64-debug
 
+  # The robustness harness under libFuzzer (design #31, decision 3): Clang
+  # with ASan, UBSan and coverage-guided mutation for a fixed minute. A
+  # crashing input is kept as an artifact; rex86_robust_libfuzzer <file>
+  # replays it.
+  linux-x64-libfuzzer:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Configure
+        env:
+          CC: clang
+          CXX: clang++
+        run: cmake -S . -B build/libfuzzer -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DREX86_LIBFUZZER=ON -DREX86_SANITIZE=address,undefined -DREX86_WARNINGS_AS_ERRORS=ON
+      - name: Build
+        run: cmake --build build/libfuzzer --target rex86_robust_libfuzzer
+      - name: Fuzz
+        run: |
+          mkdir -p build/libfuzzer/corpus build/libfuzzer/crashes
+          ./build/libfuzzer/bin/rex86_robust_libfuzzer build/libfuzzer/corpus -max_total_time=60 -timeout=10 -max_len=512 -len_control=0 -artifact_prefix=build/libfuzzer/crashes/
+      - name: Keep crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: libfuzzer-crashes
+          path: build/libfuzzer/crashes/
+
   # A 32-bit x86 host, in the i386 Debian container re2DJ's release uses.
   # JavaScript actions cannot run inside a 32-bit container, so only the
   # build and test go into it. Its ctest includes the integer host fuzz,
