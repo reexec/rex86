@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory>
 #include <unordered_set>
+#include <vector>
 
 #include "rex86/cpu_state.h"
 #include "rex86/environment.h"
@@ -127,6 +128,8 @@ public:
 
 private:
     Event RunUntilStop(std::uint64_t instruction_budget);
+    // Recomputes attention_ from the pending interrupts and stop request.
+    void RefreshAttention();
 
     CpuState state_;
     GuestMemory* memory_ = nullptr;
@@ -134,8 +137,14 @@ private:
     CodeCacheServices* code_cache_ = nullptr;
     Features features_;
     std::unordered_set<std::uint32_t> gates_;
+    // A bit filter over gates_ for the interpreter's block loop (design
+    // #35); empty while there are no gates.
+    std::vector<std::uint64_t> gate_filter_;
     std::bitset<256> pending_interrupts_;
     bool stop_requested_ = false;
+    // Raised while a stop request or an interrupt is pending, so that the
+    // interpreter's block loop returns to Run's checks (design #35).
+    bool attention_ = false;
     // The interpreter's decode cache, made once the Cpu has retired
     // kDecodeCacheWarmup instructions so short-lived Cpus never pay for it.
     std::unique_ptr<interp::DecodeCache> decode_cache_;

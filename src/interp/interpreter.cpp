@@ -1,6 +1,7 @@
 #include "interp/interpreter.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <optional>
 
@@ -22,6 +23,12 @@ namespace
 constexpr std::uint32_t kPopfWritable = kEflagsPopWritable;
 
 constexpr unsigned kMaxInstructionBytes = 15;
+
+#if defined(_MSC_VER)
+#define REX86_NOINLINE __declspec(noinline)
+#else
+#define REX86_NOINLINE __attribute__((noinline))
+#endif
 
 bool IsSegmentRegisterOperand(const ZydisDecodedOperand& operand)
 {
@@ -807,67 +814,19 @@ unsigned Fetch(const CpuState& state, const GuestMemory& memory, std::uint8_t* b
 
 }  // namespace
 
-StepResult Step(CpuState& state, GuestMemory& memory,
-                Environment& environment, const Features& features,
-                DecodeCache* cache)
+namespace
 {
-    StepResult result;
+
+// Executes an instruction already decoded at CS:EIP.
+// The result is written in place: the block loop keeps one StepResult for
+// all its instructions rather than copying one out per instruction (design
+// #35). Only status and inhibit_interrupts change on a plain retirement.
+inline void ExecuteDecoded(StepResult& result, CpuState& state, GuestMemory& memory,
+                           Environment& environment, const Features& features,
+                           const decode::DecodedInstruction& decoded)
+{
     const SegmentRegister& cs = state.Seg(Segment::kCs);
     const std::uint32_t start_offset = state.eip;
-    const std::uint32_t start_linear = cs.base + start_offset;
-
-    // The decode cache first (design #34); on a miss, fetch and decode
-    // straight into the slot the cache hands out, or into a local when
-    // there is no cache.
-    const decode::DecodedInstruction* instruction =
-        cache != nullptr
-            ? cache->Lookup(start_linear, start_offset, cs.default_32bit, cs, memory)
-            : nullptr;
-    std::optional<decode::DecodedInstruction> local;
-    if (instruction == nullptr)
-    {
-        std::uint8_t bytes[kMaxInstructionBytes] = {};
-        bool stopped_at_limit = false;
-        const unsigned fetched = Fetch(state, memory, bytes, &stopped_at_limit);
-        // An instruction that does not fit below the CS limit is #GP (SDM);
-        // a fetch cut short by page attributes is the host's access
-        // violation.
-        if (fetched == 0)
-        {
-            result.status = StepStatus::kFaulted;
-            result.event.reason = StopReason::kFault;
-            result.event.fault_kind = stopped_at_limit
-                ? FaultKind::kGeneralProtection
-                : FaultKind::kAccessViolation;
-            result.event.fault_address = start_linear;
-            result.event.fault_on_fetch = true;
-            return result;
-        }
-
-        decode::DecodedInstruction* target =
-            cache != nullptr ? cache->Claim(start_linear) : &local.emplace();
-        bool truncated = false;
-        if (!DecoderFor(cs.default_32bit)
-                 .Decode(bytes, fetched, state.eip, target, &truncated))
-        {
-            result.status = StepStatus::kFaulted;
-            result.event.reason = StopReason::kFault;
-            result.event.fault_kind = FaultKind::kIllegalInstruction;
-            if (stopped_at_limit && truncated)
-            {
-                result.event.fault_kind = FaultKind::kGeneralProtection;
-                result.event.fault_on_fetch = true;
-            }
-            result.event.fault_address = start_linear;
-            return result;
-        }
-        if (cache != nullptr)
-        {
-            cache->Commit(start_linear, start_offset, cs.default_32bit, &memory);
-        }
-        instruction = target;
-    }
-    const decode::DecodedInstruction& decoded = *instruction;
 
     if (!FeatureEnabled(decoded, features))
     {
@@ -875,7 +834,7 @@ StepResult Step(CpuState& state, GuestMemory& memory,
         result.event.reason = StopReason::kFault;
         result.event.fault_kind = FaultKind::kIllegalInstruction;
         result.event.fault_address = cs.base + start_offset;
-        return result;
+        return;
     }
 
     // Faults are precise: the integer state the instruction started from
@@ -898,19 +857,19 @@ StepResult Step(CpuState& state, GuestMemory& memory,
     // past the limit is left to the next fetch.
     if (status == ExecStatus::kContinue)
     {
-        const decode::ControlFlow flow = decoded.Flow();
-        const bool branch = flow != decode::ControlFlow::kNone &&
-            flow != decode::ControlFlow::kHalt &&
-            flow != decode::ControlFlow::kSoftwareInterrupt;
-        const SegmentRegister& new_cs = state.Seg(Segment::kCs);
-        if (branch &&
-            (next_eip != fallthrough ||
-             new_cs.selector !=
-                 saved_segments[static_cast<std::size_t>(Segment::kCs)]
-                     .selector) &&
-            !CheckBranchTarget(&ctx, next_eip))
+        // The cheap test first: most instructions fall through.
+        if (next_eip != fallthrough ||
+            state.Seg(Segment::kCs).selector !=
+                saved_segments[static_cast<std::size_t>(Segment::kCs)].selector)
         {
-            status = ExecStatus::kFault;
+            const decode::ControlFlow flow = decoded.Flow();
+            const bool branch = flow != decode::ControlFlow::kNone &&
+                flow != decode::ControlFlow::kHalt &&
+                flow != decode::ControlFlow::kSoftwareInterrupt;
+            if (branch && !CheckBranchTarget(&ctx, next_eip))
+            {
+                status = ExecStatus::kFault;
+            }
         }
     }
     if (status == ExecStatus::kFault && !ctx.keep_partial_state)
@@ -926,30 +885,153 @@ StepResult Step(CpuState& state, GuestMemory& memory,
         case ExecStatus::kContinue:
             state.eip = next_eip;
             result.status = StepStatus::kRetired;
-            return result;
+            return;
         case ExecStatus::kStop:
             state.eip = next_eip;
             result.status = StepStatus::kRetiredAndStopped;
             result.event = stop_event;
-            return result;
+            return;
         case ExecStatus::kStopNoRetire:
             // A restartable stop (declined string port I/O): EIP still
             // addresses the instruction.
             result.status = StepStatus::kStopped;
             result.event = stop_event;
-            return result;
+            return;
         case ExecStatus::kFault:
             // The instruction did not retire; EIP still addresses it.
             result.status = StepStatus::kFaulted;
             result.event = ctx.fault;
-            return result;
+            return;
         case ExecStatus::kUnimplemented:
         default:
             result.status = StepStatus::kUnimplemented;
             result.event.reason = StopReason::kFault;
             result.event.fault_kind = FaultKind::kIllegalInstruction;
             result.event.fault_address = cs.base + start_offset;
-            return result;
+            return;
+    }
+}
+
+// The miss path: fetch, decode into the cache's slot (or a local without a
+// cache) and execute. Out of line so that a hit carries no decoded
+// instruction of its own: GCC fills an optional<DecodedInstruction> local
+// with zeros on every call, 1,144 bytes, measured as a third of the time
+// per instruction (design #35).
+REX86_NOINLINE void StepMiss(StepResult& result, CpuState& state, GuestMemory& memory,
+                             Environment& environment, const Features& features,
+                             DecodeCache* cache)
+{
+    const SegmentRegister& cs = state.Seg(Segment::kCs);
+    const std::uint32_t start_offset = state.eip;
+    const std::uint32_t start_linear = cs.base + start_offset;
+
+    std::uint8_t bytes[kMaxInstructionBytes] = {};
+    bool stopped_at_limit = false;
+    const unsigned fetched = Fetch(state, memory, bytes, &stopped_at_limit);
+    // An instruction that does not fit below the CS limit is #GP (SDM);
+    // a fetch cut short by page attributes is the host's access
+    // violation.
+    if (fetched == 0)
+    {
+        result.status = StepStatus::kFaulted;
+        result.event.reason = StopReason::kFault;
+        result.event.fault_kind = stopped_at_limit
+            ? FaultKind::kGeneralProtection
+            : FaultKind::kAccessViolation;
+        result.event.fault_address = start_linear;
+        result.event.fault_on_fetch = true;
+        return;
+    }
+
+    std::optional<decode::DecodedInstruction> local;
+    decode::DecodedInstruction* target =
+        cache != nullptr ? cache->Claim(start_linear) : &local.emplace();
+    bool truncated = false;
+    if (!DecoderFor(cs.default_32bit)
+             .Decode(bytes, fetched, state.eip, target, &truncated))
+    {
+        result.status = StepStatus::kFaulted;
+        result.event.reason = StopReason::kFault;
+        result.event.fault_kind = FaultKind::kIllegalInstruction;
+        if (stopped_at_limit && truncated)
+        {
+            result.event.fault_kind = FaultKind::kGeneralProtection;
+            result.event.fault_on_fetch = true;
+        }
+        result.event.fault_address = start_linear;
+        return;
+    }
+    if (cache != nullptr)
+    {
+        cache->Commit(start_linear, start_offset, cs.default_32bit, &memory);
+    }
+    ExecuteDecoded(result, state, memory, environment, features, *target);
+}
+
+// One instruction; Step and RunBlock share it so the block loop keeps it
+// inline. The decode cache first (design #34), the miss path otherwise.
+inline void StepOne(StepResult& result, CpuState& state, GuestMemory& memory,
+                    Environment& environment, const Features& features,
+                    DecodeCache* cache)
+{
+    result.inhibit_interrupts = false;
+    if (cache != nullptr)
+    {
+        const SegmentRegister& cs = state.Seg(Segment::kCs);
+        const decode::DecodedInstruction* instruction =
+            cache->Lookup(cs.base + state.eip, state.eip, cs.default_32bit, cs, memory);
+        if (instruction != nullptr)
+        {
+            ExecuteDecoded(result, state, memory, environment, features, *instruction);
+            return;
+        }
+    }
+    StepMiss(result, state, memory, environment, features, cache);
+}
+
+}  // namespace
+
+StepResult Step(CpuState& state, GuestMemory& memory,
+                Environment& environment, const Features& features,
+                DecodeCache* cache)
+{
+    StepResult result;
+    StepOne(result, state, memory, environment, features, cache);
+    return result;
+}
+
+BlockResult RunBlock(CpuState& state, GuestMemory& memory,
+                     Environment& environment, const Features& features,
+                     DecodeCache* cache, const BlockLimits& limits)
+{
+    BlockResult block;
+    while (true)
+    {
+        StepOne(block.last, state, memory, environment, features, cache);
+        if (block.last.status != StepStatus::kRetired)
+        {
+            if (block.last.status == StepStatus::kRetiredAndStopped)
+            {
+                ++block.retired;
+            }
+            return block;
+        }
+        ++block.retired;
+        if (block.retired >= limits.max_instructions ||
+            std::atomic_ref<bool>(*limits.attention).load(std::memory_order_relaxed))
+        {
+            return block;
+        }
+        if (limits.gates != nullptr)
+        {
+            const SegmentRegister& cs = state.Seg(Segment::kCs);
+            const std::uint32_t linear =
+                cs.base + (state.eip & (cs.default_32bit ? 0xFFFFFFFFu : 0xFFFFu));
+            if (limits.gates->MayContain(linear))
+            {
+                return block;
+            }
+        }
     }
 }
 
