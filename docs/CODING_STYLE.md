@@ -6,7 +6,7 @@ rePIU의 `docs/CODING_STYLE.md`를 기준으로, 플랫폼 디렉터리가 없�
 
 ## 기본 원칙
 
-* C++ 코드는 C++20을 기준으로 작성한다.
+* C++ 코드는 C++20을 기준으로 작성한다. 표준 라이브러리 기능은 CI가 검증하는 가장 오래된 표준 라이브러리에 있는 것만 쓴다. 지금은 Emscripten 3.1.74의 libc++ 18이며, 여기에는 `std::atomic_ref`가 없다(#35).
 * 기본 기준은 Google C++ Style Guide를 따른다.
 * 프로젝트 예외 규칙은 아래 항목으로 명시한다.
 * 게스트 명령의 의미 보존을 우선하며, 편의를 위한 의미 단순화는 하지 않는다.
@@ -17,7 +17,7 @@ rePIU의 `docs/CODING_STYLE.md`를 기준으로, 플랫폼 디렉터리가 없�
 
 ## Basic Principles
 
-* Write C++ code against C++20.
+* Write C++ code against C++20, using only the standard-library features of the oldest standard library CI checks: today Emscripten 3.1.74's libc++ 18, which lacks `std::atomic_ref` (#35).
 * Follow the Google C++ Style Guide as the baseline.
 * Project-specific exceptions are defined below.
 * Prioritize preserving the meaning of guest instructions; never simplify semantics for convenience.

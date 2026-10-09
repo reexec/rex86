@@ -87,8 +87,10 @@ bool Cpu::IsGate(std::uint32_t linear_address) const
 
 void Cpu::RaiseInterrupt(std::uint8_t vector)
 {
+    // Runs on the thread that runs this Cpu (pending_interrupts_ is not
+    // atomic), so a relaxed store suffices.
     pending_interrupts_.set(vector);
-    attention_ = true;
+    attention_.value().store(true, std::memory_order_relaxed);
 }
 
 bool Cpu::HasPendingInterrupt() const
@@ -120,10 +122,10 @@ void Cpu::RefreshAttention()
     // RequestStop may run on another host thread: it stores the request
     // before raising attention, and this clears attention before reading
     // the request, so a request is never left without attention.
-    std::atomic_ref<bool>(attention_).store(pending_interrupts_.any());
-    if (std::atomic_ref<bool>(stop_requested_).load())
+    attention_.value().store(pending_interrupts_.any());
+    if (stop_requested_.value().load())
     {
-        std::atomic_ref<bool>(attention_).store(true);
+        attention_.value().store(true);
     }
 }
 
@@ -145,9 +147,9 @@ Event Cpu::RunUntilStop(std::uint64_t instruction_budget)
 
     while (true)
     {
-        if (std::atomic_ref<bool>(stop_requested_).load(std::memory_order_relaxed))
+        if (stop_requested_.value().load(std::memory_order_relaxed))
         {
-            std::atomic_ref<bool>(stop_requested_).store(false);
+            stop_requested_.value().store(false);
             RefreshAttention();
             event.reason = StopReason::kStopRequested;
             event.instructions_retired = retired;
@@ -218,7 +220,7 @@ Event Cpu::RunUntilStop(std::uint64_t instruction_budget)
                 limits.max_instructions = std::min(limits.max_instructions, kDecodeCacheWarmup - run);
             }
         }
-        limits.attention = &attention_;
+        limits.attention = &attention_.value();
         const interp::GateFilter filter{gate_filter_.data()};
         limits.gates = gate_filter_.empty() ? nullptr : &filter;
         const interp::BlockResult block =
@@ -241,8 +243,8 @@ Event Cpu::Step()
 
 void Cpu::RequestStop()
 {
-    std::atomic_ref<bool>(stop_requested_).store(true);
-    std::atomic_ref<bool>(attention_).store(true);
+    stop_requested_.value().store(true);
+    attention_.value().store(true);
 }
 
 void Cpu::InvalidateCode(std::uint32_t address, std::uint32_t size)

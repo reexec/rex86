@@ -1018,7 +1018,7 @@ BlockResult RunBlock(CpuState& state, GuestMemory& memory,
         }
         ++block.retired;
         if (block.retired >= limits.max_instructions ||
-            std::atomic_ref<bool>(*limits.attention).load(std::memory_order_relaxed))
+            limits.attention->load(std::memory_order_relaxed))
         {
             return block;
         }

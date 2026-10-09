@@ -7,6 +7,7 @@
 #ifndef REX86_INTERP_INTERPRETER_H_
 #define REX86_INTERP_INTERPRETER_H_
 
+#include <atomic>
 #include <cstdint>
 
 #include "rex86/cpu_state.h"
@@ -81,7 +82,7 @@ struct BlockLimits
     std::uint64_t max_instructions = 1;
     // Read before every instruction after the first: the Cpu raises it for a
     // stop request or a pending interrupt, which its loop handles.
-    bool* attention = nullptr;
+    const std::atomic<bool>* attention = nullptr;
     // Null when the Cpu has no gates.
     const GateFilter* gates = nullptr;
 };

@@ -1,6 +1,7 @@
 #ifndef REX86_CPU_H_
 #define REX86_CPU_H_
 
+#include <atomic>
 #include <bitset>
 #include <cstddef>
 #include <cstdint>
@@ -127,6 +128,29 @@ public:
     void InvalidateCode(std::uint32_t address, std::uint32_t size);
 
 private:
+    // A flag RequestStop may set from another host thread. std::atomic is
+    // not movable, so this moves by value to keep Cpu movable; moving a Cpu
+    // while another thread uses it is a race regardless.
+    class AtomicFlag
+    {
+    public:
+        AtomicFlag() = default;
+        AtomicFlag(AtomicFlag&& other) noexcept : value_(other.value_.load(std::memory_order_relaxed)) {}
+        AtomicFlag& operator=(AtomicFlag&& other) noexcept
+        {
+            value_.store(other.value_.load(std::memory_order_relaxed), std::memory_order_relaxed);
+            return *this;
+        }
+
+        [[nodiscard]] std::atomic<bool>& value()
+        {
+            return value_;
+        }
+
+    private:
+        std::atomic<bool> value_{false};
+    };
+
     Event RunUntilStop(std::uint64_t instruction_budget);
     // Recomputes attention_ from the pending interrupts and stop request.
     void RefreshAttention();
@@ -141,10 +165,10 @@ private:
     // #35); empty while there are no gates.
     std::vector<std::uint64_t> gate_filter_;
     std::bitset<256> pending_interrupts_;
-    bool stop_requested_ = false;
+    AtomicFlag stop_requested_;
     // Raised while a stop request or an interrupt is pending, so that the
     // interpreter's block loop returns to Run's checks (design #35).
-    bool attention_ = false;
+    AtomicFlag attention_;
     // The interpreter's decode cache, made once the Cpu has retired
     // kDecodeCacheWarmup instructions so short-lived Cpus never pay for it.
     std::unique_ptr<interp::DecodeCache> decode_cache_;
