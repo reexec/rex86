@@ -834,6 +834,11 @@ ExecStatus ExecuteExtended(Ctx* ctx, std::uint32_t* next_eip,
     {
         return status;
     }
+    status = ExecuteSseFloat(ctx);
+    if (status != ExecStatus::kUnimplemented)
+    {
+        return status;
+    }
     status = ExecuteMmx(ctx);
     if (status != ExecStatus::kUnimplemented)
     {

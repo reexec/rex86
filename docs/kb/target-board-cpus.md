@@ -63,6 +63,9 @@ flowchart LR
 * **합집합의 상한은 P6 정수 + P6 x87 + MMX + SSE(Pentium III의 Katmai SSE)다.** SSE는 MK5와 EZ2DJ 2세대가 요구한다. SSE2 이후는 네 기판 어디에도 없다.
 * K6-2만의 3DNow!는 Intel 기판과 공유되지 않는 확장이다. EZ2DJ 1세대 기판의 게임(1st ~ 6th TRAX)이 직접 쓰는지는 census로만 알 수 있다.
 * K6-2의 정수와 x87은 P6의 부분집합이므로 별도 구현이 필요 없다. 다만 K6-2 기판을 흉내 낼 때는 CMOV와 FCOMI/FCMOV가 #UD여야 하고, 이것은 CPUID와 기능 플래그(`Features::cmov`, #22)의 일이다. EZ2DJ 2nd ~ 6th TRAX도 이 흉내의 대상이다.
+* 기판별 `Features`(#29): EZ2DJ 1세대(K6-2)는 `cmov`, `fxsr`, `sse`를 끄고, MK3(Mendocino)는 `sse`만 끄고, MK5와 EZ2DJ 2세대는 기본값(전부 켬, `sse2`만 끔)이다. SSE가 더한 MMX 정수 명령(PSHUFW 등)은 `sse`를 따른다([MMX와 SSE](simd.md)).
+
+*Per-board `Features` (#29): generation 1 EZ2DJ (K6-2) turns `cmov`, `fxsr` and `sse` off, the MK3 (Mendocino) `sse` alone, and the MK5 and generation 2 EZ2DJ keep the defaults (everything on but `sse2`); the MMX integer instructions SSE added (PSHUFW, ...) follow `sse` ([MMX and SSE](simd.md)).*
 
 *CPU features are settled by the vendors (Intel SDM CPUID feature bits, AMD's K6-2). **The union's ceiling is P6 integer + P6 x87 + MMX + SSE (the Pentium III's Katmai SSE)**: SSE is required by the MK5 and generation 2 EZ2DJ, and nothing past SSE exists on any of the four. 3DNow!, the K6-2's alone, is not shared with the Intel boards, and only a census can tell whether the generation 1 board's games (1st through 6th TRAX) use it. The K6-2's integer and x87 sets are subsets of the P6's, needing no separate implementation; emulating a K6-2 board means CMOV and FCOMI/FCMOV raise #UD, which is a matter of CPUID and the feature flags (`Features::cmov`, #22), and EZ2DJ 2nd through 6th TRAX are emulated that way too.*
 

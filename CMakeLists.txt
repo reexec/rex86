@@ -95,6 +95,7 @@ add_library(rex86_core STATIC
     src/decode/decoder.cpp
     src/fpu/float80.cpp
     src/fpu/softfloat_bridge.cpp
+    src/fpu/sse_math.cpp
     src/fpu/transcendental_kernels.cpp
     src/fpu/wide_float.cpp
     src/fpu/x87_math.cpp
@@ -110,6 +111,7 @@ add_library(rex86_core STATIC
     src/interp/exec_x87_transcendental.cpp
     src/interp/exec_mmx.cpp
     src/interp/exec_sse.cpp
+    src/interp/exec_sse_float.cpp
     src/interp/exec_fxsave.cpp
     src/interp/simd_access.cpp
     src/interp/x87_access.cpp
@@ -171,6 +173,7 @@ if(REX86_BUILD_TESTS)
         tests/unit/bench_test.cpp
         tests/unit/mmx_test.cpp
         tests/unit/sse_test.cpp
+        tests/unit/sse_float_test.cpp
         src/tools/census/census.cpp
         src/tools/sst/moo_reader.cpp
     )

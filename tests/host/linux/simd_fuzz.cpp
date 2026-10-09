@@ -65,39 +65,11 @@ struct Form
     bool mxcsr_load = false;
 };
 
-// Increment 2 (SSE floating point) is not in the core yet; its forms join
-// the fuzz with it.
-bool IsSseFloat(const ZydisMnemonic m)
-{
-    switch (m)
-    {
-        case ZYDIS_MNEMONIC_ADDPS: case ZYDIS_MNEMONIC_ADDSS: case ZYDIS_MNEMONIC_SUBPS:
-        case ZYDIS_MNEMONIC_SUBSS: case ZYDIS_MNEMONIC_MULPS: case ZYDIS_MNEMONIC_MULSS:
-        case ZYDIS_MNEMONIC_DIVPS: case ZYDIS_MNEMONIC_DIVSS: case ZYDIS_MNEMONIC_SQRTPS:
-        case ZYDIS_MNEMONIC_SQRTSS: case ZYDIS_MNEMONIC_MAXPS: case ZYDIS_MNEMONIC_MAXSS:
-        case ZYDIS_MNEMONIC_MINPS: case ZYDIS_MNEMONIC_MINSS: case ZYDIS_MNEMONIC_RCPPS:
-        case ZYDIS_MNEMONIC_RCPSS: case ZYDIS_MNEMONIC_RSQRTPS: case ZYDIS_MNEMONIC_RSQRTSS:
-        case ZYDIS_MNEMONIC_CMPPS: case ZYDIS_MNEMONIC_CMPSS: case ZYDIS_MNEMONIC_COMISS:
-        case ZYDIS_MNEMONIC_UCOMISS: case ZYDIS_MNEMONIC_CVTPI2PS: case ZYDIS_MNEMONIC_CVTPS2PI:
-        case ZYDIS_MNEMONIC_CVTTPS2PI: case ZYDIS_MNEMONIC_CVTSI2SS: case ZYDIS_MNEMONIC_CVTSS2SI:
-        case ZYDIS_MNEMONIC_CVTTSS2SI:
-            return true;
-        default:
-            return false;
-    }
-}
-
-bool g_include_float = false;
-
 bool Wanted(const rex86::decode::DecodedInstruction& d)
 {
     const ZydisISASet isa = d.instruction.meta.isa_set;
     if (isa != ZYDIS_ISA_SET_PENTIUMMMX && isa != ZYDIS_ISA_SET_SSE &&
         isa != ZYDIS_ISA_SET_SSEMXCSR && isa != ZYDIS_ISA_SET_SSE_PREFETCH)
-    {
-        return false;
-    }
-    if (!g_include_float && IsSseFloat(d.instruction.mnemonic))
     {
         return false;
     }
@@ -408,9 +380,12 @@ public:
             std::perror("mmap");
             std::exit(2);
         }
+        // The signal stack lives as long as the process: a static buffer,
+        // which LeakSanitizer does not count as a leak.
+        alignas(16) static std::uint8_t alternate_stack[1u << 16];
         stack_t alternate = {};
-        alternate.ss_size = 1u << 16;
-        alternate.ss_sp = std::malloc(alternate.ss_size);
+        alternate.ss_size = sizeof alternate_stack;
+        alternate.ss_sp = alternate_stack;
         sigaltstack(&alternate, nullptr);
         struct sigaction action = {};
         action.sa_sigaction = Handler;
@@ -635,6 +610,93 @@ std::string Difference(const Outcome& host, const Outcome& core)
     return {};
 }
 
+// RCPPS/RSQRTPS and their scalar forms are approximations the SDM bounds
+// at a relative error of 1.5 * 2^-12; the core's model is closer, so a
+// lane is tolerated when the two finite results differ by at most 2^-11
+// relatively, or, for RCP, when the input lies in the SDM's
+// implementation-defined band between "never tiny" and "always tiny" and
+// one side flushed to zero (design #29, decision 6). Everything else must
+// match exactly.
+struct Approximation
+{
+    bool rsqrt = false;
+    bool scalar = false;
+    unsigned destination = 0;
+    std::uint32_t source[4] = {};
+};
+
+bool ApproximationOf(const Input& input, Approximation* a)
+{
+    const std::vector<std::uint8_t>& code = input.code;
+    std::size_t at = 0;
+    a->scalar = code[0] == 0xF3;
+    if (a->scalar) ++at;
+    if (code[at] != 0x0F || (code[at + 1] != 0x52 && code[at + 1] != 0x53)) return false;
+    a->rsqrt = code[at + 1] == 0x52;
+    const std::uint8_t modrm = code[at + 2];
+    a->destination = (modrm >> 3) & 7u;
+    const std::uint8_t* from = nullptr;
+    if ((modrm >> 6) == 3)
+    {
+        from = input.image + 160 + 16 * (modrm & 7u);
+    }
+    else
+    {
+        from = input.data + ((modrm >> 6) == 1 ? code[at + 3] : 0);
+    }
+    for (unsigned lane = 0; lane < 4; ++lane)
+    {
+        std::memcpy(&a->source[lane], from + 4 * lane, 4);
+    }
+    return true;
+}
+
+bool LaneTolerated(const Approximation& a, const std::uint32_t x, const std::uint32_t h,
+                   const std::uint32_t c)
+{
+    if (h == c) return true;
+    const auto finite_nonzero = [](const std::uint32_t v) {
+        return (v & 0x7F800000u) != 0x7F800000u && (v & 0x7FFFFFFFu) != 0;
+    };
+    if (!a.rsqrt && ((h & 0x7FFFFFFFu) == 0 || (c & 0x7FFFFFFFu) == 0))
+    {
+        // 1.11111111110100000000000b * 2^125 .. 1.00000000000110000000001b * 2^126
+        const std::uint32_t m = x & 0x7FFFFFFFu;
+        return m >= 0x7E7FE800u && m <= 0x7E800C01u && (h >> 31) == (c >> 31);
+    }
+    if (!finite_nonzero(h) || !finite_nonzero(c) || (h >> 31) != (c >> 31)) return false;
+    float hf = 0;
+    float cf = 0;
+    std::memcpy(&hf, &h, 4);
+    std::memcpy(&cf, &c, 4);
+    const double diff = static_cast<double>(hf) - static_cast<double>(cf);
+    const double bound = static_cast<double>(cf) / 2048.0;
+    return (diff < 0 ? -diff : diff) <= (bound < 0 ? -bound : bound);
+}
+
+// True when the only differences are tolerated RCP/RSQRT lanes.
+bool WithinTolerance(const Input& input, const Outcome& host, const Outcome& core)
+{
+    Approximation a;
+    if (host.fault != core.fault || host.fault != rex86::FaultKind::kNone ||
+        !ApproximationOf(input, &a))
+    {
+        return false;
+    }
+    Outcome patched = core;
+    const unsigned base = 160 + 16 * a.destination;
+    for (unsigned lane = 0; lane < (a.scalar ? 1u : 4u); ++lane)
+    {
+        std::uint32_t h = 0;
+        std::uint32_t c = 0;
+        std::memcpy(&h, host.out + base + 4 * lane, 4);
+        std::memcpy(&c, core.out + base + 4 * lane, 4);
+        if (!LaneTolerated(a, a.source[lane], h, c)) return false;
+        std::memcpy(patched.out + base + 4 * lane, &h, 4);
+    }
+    return Difference(host, patched).empty();
+}
+
 // The trace case for a matching run: the core's own stub and regions, the
 // host's results as the expectation, the uncompared bytes ignored.
 rex86::trace::Case BuildCase(const Input& input, const Outcome& host)
@@ -729,10 +791,6 @@ int main(int argc, char** argv)
         {
             only = argv[++i];
         }
-        else if (std::strcmp(argv[i], "--float") == 0)
-        {
-            g_include_float = true;
-        }
         else if (positional++ == 0)
         {
             iterations = std::strtoull(argv[i], nullptr, 0);
@@ -773,6 +831,7 @@ int main(int argc, char** argv)
     std::map<std::string, std::uint64_t> failures;
     std::map<int, std::uint64_t> faults;
     std::uint64_t mismatches = 0;
+    std::uint64_t within_tolerance = 0;
     for (std::uint64_t n = 0; n < iterations; ++n)
     {
         const Form& form = forms[gen.Bits(32) % forms.size()];
@@ -790,11 +849,18 @@ int main(int argc, char** argv)
         const Outcome expected = host.Run(input);
         const Outcome actual = core.Run(input);
         std::string difference = Difference(expected, actual);
+        bool tolerated = false;
+        if (!difference.empty() && WithinTolerance(input, expected, actual))
+        {
+            ++within_tolerance;
+            difference.clear();
+            tolerated = true;  // a trace holds one expectation: not recorded
+        }
         if (difference.empty())
         {
             ++faults[static_cast<int>(expected.fault)];
         }
-        if (difference.empty() && !record_path.empty())
+        if (difference.empty() && !tolerated && !record_path.empty())
         {
             const rex86::trace::Case c = BuildCase(input, expected);
             const rex86::trace::ReplayResult replayed = rex86::trace::Replay(c);
@@ -821,9 +887,10 @@ int main(int argc, char** argv)
     {
         record.Close();
     }
-    std::printf("forms=%zu iterations=%llu seed=%llu mismatches=%llu\n", forms.size(),
-                static_cast<unsigned long long>(iterations), static_cast<unsigned long long>(seed),
-                static_cast<unsigned long long>(mismatches));
+    std::printf("forms=%zu iterations=%llu seed=%llu mismatches=%llu within_tolerance=%llu\n",
+                forms.size(), static_cast<unsigned long long>(iterations),
+                static_cast<unsigned long long>(seed), static_cast<unsigned long long>(mismatches),
+                static_cast<unsigned long long>(within_tolerance));
     std::printf("faults:");
     for (const auto& [kind, count] : faults)
     {

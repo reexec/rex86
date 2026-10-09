@@ -63,6 +63,10 @@ ExecStatus ExecuteFxsave(Ctx* ctx);
 // moves, logic, shuffles, unpacks, MOVMSKPS, MOVNTPS, PREFETCHh, SFENCE.
 ExecStatus ExecuteSse(Ctx* ctx);
 
+// The SSE floating-point instructions (#29, increment 2): arithmetic,
+// MIN/MAX, SQRT, RCP/RSQRT, compares, COMISS/UCOMISS and conversions.
+ExecStatus ExecuteSseFloat(Ctx* ctx);
+
 // The MMX instructions and the MMX integer instructions SSE added, EMMS
 // included (#29).
 ExecStatus ExecuteMmx(Ctx* ctx);

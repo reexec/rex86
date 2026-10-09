@@ -326,7 +326,13 @@ void ExecuteTest(ExecuteHarness* harness, const rex86::sst::MooFile& file,
     // HLT also sits at every branch target), capturing the final state on
     // the HALT. So: step until a HLT retires, which normally takes two
     // steps. The cap only guards a runaway.
-    const rex86::Features features;
+    // The 386EX has no MMX, SSE or FXSAVE: the runner keeps the
+    // configuration it was verified with before those defaults turned on
+    // (design #29, decision 1).
+    rex86::Features features;
+    features.mmx = false;
+    features.sse = false;
+    features.fxsr = false;
     // A 32-bit-address REP with a large count outruns the rig's cycle
     // budget: the hardware was interrupted mid-string and the final state
     // is a partial iteration this harness cannot predict.
