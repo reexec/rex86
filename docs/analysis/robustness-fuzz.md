@@ -25,13 +25,19 @@
 
 ## 2. 찾은 결함 / Defects found
 
-**코어에서 찾은 결함은 없다.** 이 하네스 이전의 작업들(SingleStepTests, 세 호스트 대조 fuzz, ASan/UBSan CI)이 이미 경계 검사와 폴트 경로를 넓게 다뤘기 때문으로 **추정**한다. 하네스를 만들며 고친 것은 하네스 자신과 빌드의 문제다.
+**#31 작업 중에는 코어에서 찾은 결함이 없었다**(#34에서 하나를 찾았다, 아래). 이 하네스 이전의 작업들(SingleStepTests, 세 호스트 대조 fuzz, ASan/UBSan CI)이 이미 경계 검사와 폴트 경로를 넓게 다뤘기 때문으로 **추정**한다. 하네스를 만들며 고친 것은 하네스 자신과 빌드의 문제다.
 
 * MSVC가 다이제스트에서 `bool`과 `int`를 `|`로 섞은 곳을 경고 C4805로 막았다.
 * 처음 생성기는 케이스 대부분이 첫 명령에서 폴트로 끝났다(300건에 660명령). 온건한/적대적 케이스로 나누고, 명령 수프의 ModRM과 변위를 조정하고, 인출 폴트 뒤 EIP를 옮기도록 해 케이스당 retire 수를 약 70배로 늘렸다.
 * libFuzzer 입력이 생성기의 처음 몇 선택에만 쓰여, 변형이 명령 바이트에 닿지 않았다. 앞 16바이트만 생성기에 쓰고 나머지를 EIP의 코드로 넣도록 바꿨다.
 
-***No defect was found in the core**, inferred to be because earlier work (SingleStepTests, three host-comparison fuzzes, the ASan/UBSan CI) already covered the bounds checks and fault paths broadly. What was fixed belongs to the harness and the build: MSVC's C4805 on bool-int packing in the digest; a first generator whose cases mostly ended at the first instruction (660 instructions over 300 cases), raised about seventyfold by benign/hostile cases, ModRM and displacement tuning in the instruction soup and moving EIP after fetch faults; and libFuzzer input that only fed the generator's first choices, now 16 header bytes for the generator and the rest as the code at EIP.*
+***No core defect was found during #31** (one was found during #34, below), inferred to be because earlier work (SingleStepTests, three host-comparison fuzzes, the ASan/UBSan CI) already covered the bounds checks and fault paths broadly. What was fixed belongs to the harness and the build: MSVC's C4805 on bool-int packing in the digest; a first generator whose cases mostly ended at the first instruction (660 instructions over 300 cases), raised about seventyfold by benign/hostile cases, ModRM and displacement tuning in the instruction soup and moving EIP after fetch faults; and libFuzzer input that only fed the generator's first choices, now 16 header bytes for the generator and the rest as the code at EIP.*
+
+### #34에서 찾은 결함 / Found during #34
+
+* **확인됨(ASan, 2026-10-09)**: 시드 5046451(캐시를 늘 켠 Release 빌드의 20만 건 실행)에서 스택 버퍼 넘침. `ExecuteMmx`가 MM 레지스터를 쓰는 명령을 모두 받아, `Features::sse2`가 켜진 케이스에서 SSE2의 `CVTPD2PI mm, m128`이 들어오자 8바이트 버퍼에 16바이트를 읽었다. 1b(#29)에서 들어간 결함이며 디코드 캐시와는 관계없다(결과는 캐시 유무와 무관하고, 그 시드 범위를 캐시 빌드로만 돌렸을 뿐이다). `ExecuteMmx`가 MMX와 SSE 집합만 받고, MM과 XMM 원본 읽기가 너무 큰 피연산자를 거절하도록 고쳤다. `sse2`는 범위 밖이므로 그런 명령은 #UD다. 단위 테스트로 고정했다.
+
+*Confirmed (ASan, 2026-10-09): seed 5046451, in a 200,000-case run of a cache-always Release build, overflowed a stack buffer: `ExecuteMmx` took every instruction with an MM register, so with `Features::sse2` on, SSE2's `CVTPD2PI mm, m128` read 16 bytes into an 8-byte buffer. A defect from 1b (#29), unrelated to the decode cache (results do not depend on it; that seed range simply ran on a cache build). Fixed by `ExecuteMmx` taking the MMX and SSE sets only and the MM/XMM source readers refusing oversized operands; with `sse2` out of scope such instructions are #UD; pinned by a unit test.*
 
 ## 3. 발견 사항: REP의 정지 시간 / Finding: REP stall time
 

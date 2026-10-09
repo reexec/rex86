@@ -327,15 +327,27 @@ int main(int argc, char** argv)
         ok = false;
     }
 
-    // Goal 7's instrumentation: what the core and the harness hold. Code
-    // cache usage joins this line with the translation backend.
+    // Goal 7's instrumentation: what the core and the harness hold. The
+    // page table keeps a flag byte and a 4-byte generation per page; the
+    // engines' memory (the decode cache today, design #34) is read from a
+    // Machine that has run past the cache's warm-up. The translation
+    // backends' code caches join it.
+    std::size_t engine_bytes = 0;
+    {
+        rex86::bench::Machine machine(image, image.workloads.front());
+        std::uint64_t laps = 0;
+        std::uint64_t lap_instructions = 0;
+        std::string ignored;
+        machine.RunFrame(1000, &laps, &lap_instructions, &ignored);
+        engine_bytes = machine.cpu().EngineMemoryBytes();
+    }
     std::printf("[rex86-bench] memory guest_bytes=%u page_table_bytes=%u cpu_bytes=%u "
-                "cpu_state_bytes=%u\n",
+                "cpu_state_bytes=%u engine_bytes=%zu\n",
                 rex86::bench::kMemoryBytes,
                 static_cast<unsigned>((rex86::bench::kMemoryBytes / rex86::kGuestPageSize) *
-                                      sizeof(rex86::PageFlag)),
+                                      (sizeof(rex86::PageFlag) + sizeof(std::uint32_t))),
                 static_cast<unsigned>(sizeof(rex86::Cpu)),
-                static_cast<unsigned>(sizeof(rex86::CpuState)));
+                static_cast<unsigned>(sizeof(rex86::CpuState)), engine_bytes);
     std::printf("[rex86-bench] result=%s\n", ok ? "ok" : "fail");
     return ok ? 0 : 1;
 }

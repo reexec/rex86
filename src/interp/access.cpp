@@ -2,6 +2,9 @@
 
 #include "interp/flags.h"
 
+#include <array>
+#include <cstddef>
+
 namespace rex86::interp
 {
 
@@ -15,9 +18,9 @@ struct GprSlot
     bool high_byte;
 };
 
-// Maps a Zydis general-purpose register id onto the register file. Returns
-// false for anything that is not a GPR (segment registers, EIP, ...).
-bool SlotOf(const ZydisRegister reg, GprSlot* slot)
+// The mapping of a Zydis general-purpose register id onto the register
+// file, as a switch for building the table below.
+constexpr bool SlotOfSwitch(const ZydisRegister reg, GprSlot* slot)
 {
     switch (reg)
     {
@@ -47,6 +50,43 @@ bool SlotOf(const ZydisRegister reg, GprSlot* slot)
         case ZYDIS_REGISTER_EDI: *slot = {Gpr::kEdi, 32, false}; return true;
         default: return false;
     }
+}
+
+// Zydis numbers AL through EDI contiguously; the switch compiled to a jump
+// table with stores was measured at 16% of the time per instruction under
+// MSVC (design #35), so the mapping is a table lookup.
+struct SlotEntry
+{
+    GprSlot slot{Gpr::kEax, 0, false};
+    bool valid = false;
+};
+
+constexpr std::size_t kSlotTableSize = ZYDIS_REGISTER_EDI - ZYDIS_REGISTER_AL + 1;
+
+constexpr std::array<SlotEntry, kSlotTableSize> MakeSlotTable()
+{
+    std::array<SlotEntry, kSlotTableSize> table{};
+    for (std::size_t index = 0; index < kSlotTableSize; ++index)
+    {
+        const auto reg = static_cast<ZydisRegister>(ZYDIS_REGISTER_AL + index);
+        table[index].valid = SlotOfSwitch(reg, &table[index].slot);
+    }
+    return table;
+}
+
+constexpr std::array<SlotEntry, kSlotTableSize> kSlotTable = MakeSlotTable();
+
+// Maps a Zydis general-purpose register id onto the register file. Returns
+// false for anything that is not a GPR (segment registers, EIP, ...).
+bool SlotOf(const ZydisRegister reg, GprSlot* slot)
+{
+    const std::size_t index = static_cast<std::size_t>(reg) - ZYDIS_REGISTER_AL;
+    if (index >= kSlotTableSize || !kSlotTable[index].valid)
+    {
+        return false;
+    }
+    *slot = kSlotTable[index].slot;
+    return true;
 }
 
 }  // namespace
@@ -335,9 +375,10 @@ bool WriteVirtual(Ctx* ctx, const Segment segment, const std::uint32_t offset,
         return false;
     }
     // Self-modifying code: a store into translated code invalidates the
-    // translation before the store lands (goal 2's SMC bar). The
-    // interpreter itself has no stale blocks, but keeping the page table
-    // truthful here is what the translation backends will rely on.
+    // translation before the store lands (goal 2's SMC bar). Clearing the
+    // flag raises the page's generation, which drops the interpreter's
+    // cached decodes (design #34), the next instruction's included even
+    // inside a block (design #35); the translation backends rely on it too.
     const std::uint32_t bytes = width_bits / 8u;
     for (std::uint32_t page = linear & ~(kGuestPageSize - 1u);
          page <= ((linear + bytes - 1u) & ~(kGuestPageSize - 1u));

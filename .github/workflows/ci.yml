@@ -49,7 +49,9 @@ jobs:
 
   # AddressSanitizer and UndefinedBehaviorSanitizer over rex86's own
   # targets with GCC's runtimes; third_party stays uninstrumented (design
-  # #22, decision 7).
+  # #22, decision 7). The decode cache's warm-up is 0 here, so every test
+  # and fuzz runs through the cache (design #34) while the other jobs keep
+  # the default.
   linux-x64-sanitize:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
@@ -58,7 +60,7 @@ jobs:
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y ninja-build
       - name: Configure
-        run: cmake --preset linux-x64-debug -DREX86_WARNINGS_AS_ERRORS=ON -DREX86_SANITIZE=address,undefined
+        run: cmake --preset linux-x64-debug -DREX86_WARNINGS_AS_ERRORS=ON -DREX86_SANITIZE=address,undefined -DREX86_DECODE_CACHE_WARMUP=0
       - name: Build
         run: cmake --build --preset linux-x64-debug
       - name: Test

@@ -184,6 +184,10 @@ bool ReadMmSource(Ctx* ctx, const ZydisDecodedOperand& operand, std::uint64_t* v
     }
     std::uint8_t bytes[8] = {};
     const unsigned count = operand.size / 8u;
+    if (count > sizeof bytes)
+    {
+        return false;  // not an MMX operand
+    }
     if (!ReadMemory(ctx, operand, count, bytes))
     {
         return false;
@@ -215,6 +219,10 @@ bool ReadXmmSource(Ctx* ctx, const ZydisDecodedOperand& operand, const bool alig
         return false;
     }
     Xmm bytes = {};
+    if (operand.size / 8u > bytes.size())
+    {
+        return false;  // not an SSE operand
+    }
     if (!ReadMemory(ctx, operand, operand.size / 8u, bytes.data()))
     {
         return false;

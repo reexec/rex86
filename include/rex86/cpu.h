@@ -1,9 +1,13 @@
 #ifndef REX86_CPU_H_
 #define REX86_CPU_H_
 
+#include <atomic>
 #include <bitset>
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <unordered_set>
+#include <vector>
 
 #include "rex86/cpu_state.h"
 #include "rex86/environment.h"
@@ -15,6 +19,11 @@
 // this shape), so the core creates no host threads of its own.
 namespace rex86
 {
+
+namespace interp
+{
+class DecodeCache;
+}
 
 enum class Engine : std::uint8_t
 {
@@ -33,6 +42,10 @@ public:
         Environment* environment,
         const Features& features,
         CodeCacheServices* code_cache = nullptr);
+    ~Cpu();
+    // Movable, not copyable: a Cpu owns its interpreter's decode cache.
+    Cpu(Cpu&&) noexcept;
+    Cpu& operator=(Cpu&&) noexcept;
 
     [[nodiscard]] CpuState& state()
     {
@@ -69,6 +82,12 @@ public:
     // Which engine Run would use. kNone until an engine exists.
     [[nodiscard]] Engine ActiveEngine() const;
 
+    // Bytes the engines hold beyond the Cpu itself: today the interpreter's
+    // decode cache, made after a short warm-up (design #34); the
+    // translation backends' code caches join it. For goal 7's resource
+    // instrumentation.
+    [[nodiscard]] std::size_t EngineMemoryBytes() const;
+
     // Gates: linear addresses at which execution stops with kGate before
     // the instruction there runs.
     void RegisterGate(std::uint32_t linear_address);
@@ -102,18 +121,58 @@ public:
 
     // Tells the engines that [address, address + size) changed under them,
     // as when the host writes code into guest memory. Clears kTranslated on
-    // those pages.
+    // those pages, which raises their generation and drops every cached
+    // decode or translation over them. The interpreter caches decodes too
+    // (design #34), so a host changing code that has already run must call
+    // this.
     void InvalidateCode(std::uint32_t address, std::uint32_t size);
 
 private:
+    // A flag RequestStop may set from another host thread. std::atomic is
+    // not movable, so this moves by value to keep Cpu movable; moving a Cpu
+    // while another thread uses it is a race regardless.
+    class AtomicFlag
+    {
+    public:
+        AtomicFlag() = default;
+        AtomicFlag(AtomicFlag&& other) noexcept : value_(other.value_.load(std::memory_order_relaxed)) {}
+        AtomicFlag& operator=(AtomicFlag&& other) noexcept
+        {
+            value_.store(other.value_.load(std::memory_order_relaxed), std::memory_order_relaxed);
+            return *this;
+        }
+
+        [[nodiscard]] std::atomic<bool>& value()
+        {
+            return value_;
+        }
+
+    private:
+        std::atomic<bool> value_{false};
+    };
+
+    Event RunUntilStop(std::uint64_t instruction_budget);
+    // Recomputes attention_ from the pending interrupts and stop request.
+    void RefreshAttention();
+
     CpuState state_;
     GuestMemory* memory_ = nullptr;
     Environment* environment_ = nullptr;
     CodeCacheServices* code_cache_ = nullptr;
     Features features_;
     std::unordered_set<std::uint32_t> gates_;
+    // A bit filter over gates_ for the interpreter's block loop (design
+    // #35); empty while there are no gates.
+    std::vector<std::uint64_t> gate_filter_;
     std::bitset<256> pending_interrupts_;
-    bool stop_requested_ = false;
+    AtomicFlag stop_requested_;
+    // Raised while a stop request or an interrupt is pending, so that the
+    // interpreter's block loop returns to Run's checks (design #35).
+    AtomicFlag attention_;
+    // The interpreter's decode cache, made once the Cpu has retired
+    // kDecodeCacheWarmup instructions so short-lived Cpus never pay for it.
+    std::unique_ptr<interp::DecodeCache> decode_cache_;
+    std::uint64_t retired_total_ = 0;
     // Set for one boundary after MOV SS, POP SS or an IF-enabling STI.
     bool interrupt_shadow_ = false;
 };

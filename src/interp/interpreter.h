@@ -7,6 +7,7 @@
 #ifndef REX86_INTERP_INTERPRETER_H_
 #define REX86_INTERP_INTERPRETER_H_
 
+#include <atomic>
 #include <cstdint>
 
 #include "rex86/cpu_state.h"
@@ -15,6 +16,8 @@
 
 namespace rex86::interp
 {
+
+class DecodeCache;
 
 enum class StepStatus : std::uint8_t
 {
@@ -45,9 +48,61 @@ struct StepResult
     bool inhibit_interrupts = false;
 };
 
-// Executes one instruction at CS:EIP.
+// Executes one instruction at CS:EIP. With a cache, decodes are kept and
+// reused while their pages' generations hold (design #34); without one,
+// every instruction is fetched and decoded afresh.
 StepResult Step(CpuState& state, GuestMemory& memory,
-                Environment& environment, const Features& features);
+                Environment& environment, const Features& features,
+                DecodeCache* cache = nullptr);
+
+// The Cpu's gates as RunBlock sees them (design #35): a 65,536-bit filter
+// over linear addresses. A clear bit proves no gate is there; a set bit ends
+// the block so that the Cpu's loop consults the exact set.
+struct GateFilter
+{
+    static constexpr std::uint32_t kWords = (1u << 16) / 64u;
+
+    static std::uint32_t Bit(const std::uint32_t linear)
+    {
+        return (linear * 0x9E3779B1u) >> 16;
+    }
+
+    [[nodiscard]] bool MayContain(const std::uint32_t linear) const
+    {
+        const std::uint32_t bit = Bit(linear);
+        return ((words[bit >> 6] >> (bit & 63u)) & 1u) != 0;
+    }
+
+    const std::uint64_t* words = nullptr;
+};
+
+struct BlockLimits
+{
+    // At least one instruction runs; the block stops once this many retired.
+    std::uint64_t max_instructions = 1;
+    // Read before every instruction after the first: the Cpu raises it for a
+    // stop request or a pending interrupt, which its loop handles.
+    const std::atomic<bool>* attention = nullptr;
+    // Null when the Cpu has no gates.
+    const GateFilter* gates = nullptr;
+};
+
+struct BlockResult
+{
+    // The last instruction's result; kRetired when the block ended on a
+    // limit rather than an event.
+    StepResult last;
+    std::uint64_t retired = 0;
+};
+
+// Executes instructions from CS:EIP as Step would, one after another, until
+// one does not simply retire, the limit is reached, attention is raised, or
+// the next instruction may be at a gate. Every instruction keeps Step's
+// semantics, precise faults included; only the Cpu loop's checks between
+// instructions are skipped while nothing can need them.
+BlockResult RunBlock(CpuState& state, GuestMemory& memory,
+                     Environment& environment, const Features& features,
+                     DecodeCache* cache, const BlockLimits& limits);
 
 // Pushes the FLAGS/CS/IP frame for an accepted external interrupt, clears
 // IF and TF and jumps to the target the host supplied. Returns false with

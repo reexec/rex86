@@ -84,8 +84,19 @@ public:
     // True when every page overlapping the range has all of wanted.
     [[nodiscard]] bool AllHave(std::uint32_t address, std::uint32_t size, PageFlag wanted) const;
 
+    // The page's translation generation: it rises by one whenever kTranslated
+    // goes from set to clear (a store into translated code, InvalidateCode,
+    // or the host's own Set or Remove). An engine records it with what it
+    // translated and trusts the translation only while it is unchanged, which
+    // keeps every Cpu sharing this memory correct (design #34, decision 2).
+    // Zero past the end.
+    [[nodiscard]] std::uint32_t Generation(std::uint32_t address) const;
+
 private:
+    void Update(std::uint32_t page, PageFlag flags);
+
     std::vector<PageFlag> flags_;
+    std::vector<std::uint32_t> generations_;
 };
 
 class GuestMemory
