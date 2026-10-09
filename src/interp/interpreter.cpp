@@ -823,7 +823,7 @@ namespace
 // #35). Only status and inhibit_interrupts change on a plain retirement.
 inline void ExecuteDecoded(StepResult& result, CpuState& state, GuestMemory& memory,
                            Environment& environment, const Features& features,
-                           const decode::DecodedInstruction& decoded, StepBudget* budget)
+                           const decode::DecodedInstruction& decoded)
 {
     const SegmentRegister& cs = state.Seg(Segment::kCs);
     const std::uint32_t start_offset = state.eip;
@@ -847,7 +847,7 @@ inline void ExecuteDecoded(StepResult& result, CpuState& state, GuestMemory& mem
 
     Ctx ctx{state, memory, environment, decoded, Event{}, false};
     ctx.features = &features;
-    ctx.budget = budget;
+    ctx.budget = result.budget;
     const std::uint32_t fallthrough = start_offset + decoded.Length();
     std::uint32_t next_eip = fallthrough;
     Event stop_event;
@@ -925,7 +925,7 @@ inline void ExecuteDecoded(StepResult& result, CpuState& state, GuestMemory& mem
 // per instruction (design #35).
 REX86_NOINLINE void StepMiss(StepResult& result, CpuState& state, GuestMemory& memory,
                              Environment& environment, const Features& features,
-                             DecodeCache* cache, StepBudget* budget)
+                             DecodeCache* cache)
 {
     const SegmentRegister& cs = state.Seg(Segment::kCs);
     const std::uint32_t start_offset = state.eip;
@@ -971,14 +971,14 @@ REX86_NOINLINE void StepMiss(StepResult& result, CpuState& state, GuestMemory& m
     {
         cache->Commit(start_linear, start_offset, cs.default_32bit, &memory);
     }
-    ExecuteDecoded(result, state, memory, environment, features, *target, budget);
+    ExecuteDecoded(result, state, memory, environment, features, *target);
 }
 
 // One instruction; Step and RunBlock share it so the block loop keeps it
 // inline. The decode cache first (design #34), the miss path otherwise.
 inline void StepOne(StepResult& result, CpuState& state, GuestMemory& memory,
                     Environment& environment, const Features& features,
-                    DecodeCache* cache, StepBudget* budget)
+                    DecodeCache* cache)
 {
     result.inhibit_interrupts = false;
     if (cache != nullptr)
@@ -988,12 +988,11 @@ inline void StepOne(StepResult& result, CpuState& state, GuestMemory& memory,
             cache->Lookup(cs.base + state.eip, state.eip, cs.default_32bit, cs, memory);
         if (instruction != nullptr)
         {
-            ExecuteDecoded(result, state, memory, environment, features, *instruction,
-                           budget);
+            ExecuteDecoded(result, state, memory, environment, features, *instruction);
             return;
         }
     }
-    StepMiss(result, state, memory, environment, features, cache, budget);
+    StepMiss(result, state, memory, environment, features, cache);
 }
 
 }  // namespace
@@ -1003,7 +1002,7 @@ StepResult Step(CpuState& state, GuestMemory& memory,
                 DecodeCache* cache)
 {
     StepResult result;
-    StepOne(result, state, memory, environment, features, cache, nullptr);
+    StepOne(result, state, memory, environment, features, cache);
     return result;
 }
 
@@ -1013,32 +1012,29 @@ BlockResult RunBlock(CpuState& state, GuestMemory& memory,
 {
     BlockResult block;
     StepBudget budget;
+    budget.limit = limits.max_steps;
     budget.attention = limits.attention;
+    block.last.budget = &budget;
     while (true)
     {
-        budget.allowance = limits.max_steps - block.steps;
-        StepOne(block.last, state, memory, environment, features, cache, &budget);
-        // A string instruction reports its steps, the iterations a fault or a
-        // declined port mid-REP left behind included (design #32); any other
-        // counts one if it retired.
+        StepOne(block.last, state, memory, environment, features, cache);
+        // An instruction that retires counts one step here; a string
+        // instruction has added its other iterations, and those a fault, a
+        // declined port or a partial run left behind (design #32).
         const StepStatus status = block.last.status;
-        if (budget.string_steps != 0)
-        {
-            block.steps += budget.string_steps;
-            budget.string_steps = 0;
-        }
-        else if (status == StepStatus::kRetired || status == StepStatus::kRetiredAndStopped)
-        {
-            ++block.steps;
-        }
         if (status != StepStatus::kRetired)
         {
-            return block;
+            if (status == StepStatus::kRetiredAndStopped)
+            {
+                ++budget.used;
+            }
+            break;
         }
-        if (block.steps >= limits.max_steps ||
+        ++budget.used;
+        if (budget.used >= budget.limit ||
             limits.attention->load(std::memory_order_relaxed))
         {
-            return block;
+            break;
         }
         if (limits.gates != nullptr)
         {
@@ -1047,10 +1043,13 @@ BlockResult RunBlock(CpuState& state, GuestMemory& memory,
                 cs.base + (state.eip & (cs.default_32bit ? 0xFFFFFFFFu : 0xFFFFu));
             if (limits.gates->MayContain(linear))
             {
-                return block;
+                break;
             }
         }
     }
+    block.last.budget = nullptr;
+    block.steps = budget.used;
+    return block;
 }
 
 bool EnterInterrupt(CpuState& state, GuestMemory& memory,

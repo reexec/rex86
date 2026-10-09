@@ -18,16 +18,17 @@
 namespace rex86::interp
 {
 
-// What RunBlock lends a REP string (design #32): the steps it may run
-// before stopping between iterations, the Cpu's attention flag, and where
-// a string instruction reports the steps it ran. Zero there means none was
-// reported: the instruction counts one step if it retired, none otherwise.
-// Only string instructions touch it, so other instructions pay nothing.
+// What RunBlock lends a REP string (design #32): the block's step limit,
+// the steps it has run so far, and the Cpu's attention flag. RunBlock counts
+// one step for each instruction that retires; a string instruction adds the
+// iterations beyond that, or all it completed when it does not retire (a
+// partial run, a fault, a declined port). Only string instructions touch
+// it, so other instructions pay nothing.
 struct StepBudget
 {
-    std::uint64_t allowance = ~std::uint64_t{0};
+    std::uint64_t limit = ~std::uint64_t{0};
+    std::uint64_t used = 0;
     const std::atomic<bool>* attention = nullptr;
-    std::uint64_t string_steps = 0;
 };
 
 // One instruction's execution context. `fault` is filled by the first

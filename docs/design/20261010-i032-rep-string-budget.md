@@ -53,6 +53,14 @@ flowchart TD
 
 *The string loop gets an **allowance** of steps and the `attention` flag (#35) through Ctx. After each iteration it checks the count and the condition first; if the instruction is not finished, it checks whether the allowance is used up or `attention` is raised, and either returns `kPartial`: EIP still at the instruction and the registers as the last iteration left them (the SDM's suspended state). Budget: `RunBlock` passes the remaining steps as the allowance, so `Run(budget)` returns `kBudgetExhausted` at exactly budget steps (the robustness invariant I5 holds as is, in steps). Stop requests and interrupts: `attention` is read every iteration (one relaxed load), so `RequestStop`, or an interrupt raised in a host callback (an INS/OUTS port callback), is seen at the next iteration boundary, where `Run` delivers a pending interrupt with the string instruction as the return EIP and the remaining iterations continuing after IRET, as in the SDM. The interrupt shadow: a REP right after STI or MOV SS has the shadow over its first step (iteration) alone. Unresolved: the SDM does not relate the shadow to REP iteration boundaries; one rule for every boundary is simplest and keeps today's meaning. No allowance: callers of `interp::Step` itself (the SST runner, unit tests) pass none and the instruction runs to completion as today; the SST runner is unchanged.*
 
+**구현 형태(측정 뒤 갱신)**: 허용은 `Ctx`의 필드나 함수 인자로 명령마다 넘기지 않는다. 처음의 두 구현은 명령마다 값을 쓰거나 인자를 하나 더 넘겼고, 그 비용이 alu와 call 워크로드에서 6~8% 회귀로 측정됐다(작업 로그). 지금 형태는 다음과 같다.
+
+* `RunBlock`은 스택에 `StepBudget` 하나(블록의 단계 한도 `limit`, 지금까지 쓴 단계 `used`, `attention`)를 두고, 이미 모든 명령에 참조로 넘기는 `StepResult`의 `budget` 필드로 빌려준다. 일곱째 인자가 스택으로 넘어가며 레지스터를 밀어내던 비용이 없어진다.
+* `RunBlock`은 retire한 명령마다 `used`를 하나 올린다. 이것이 블록의 단계 계수기다.
+* 문자열 명령만 `StepBudget`을 만진다. retire하면 마지막 반복을 뺀 반복 수를, retire하지 않으면(반복 사이 정지, 폴트, 거절된 포트) 끝낸 반복 수를 `used`에 더한다. 허용 검사는 `used + 끝낸 반복 >= limit`이다.
+
+*Implementation form (updated after measuring): the allowance is not passed per instruction as a `Ctx` field or a function argument. The first two implementations wrote a value per instruction or passed one more argument, and that cost measured as a 6-8% regression on the alu and call workloads (work log). Now `RunBlock` keeps one `StepBudget` on its stack (the block's step `limit`, the steps `used` so far, `attention`) and lends it through the `budget` field of the `StepResult` it already passes every instruction by reference, so no seventh argument goes on the stack and pushes registers out; `RunBlock` raises `used` by one for each instruction that retires, which is the block's step counter; only string instructions touch the `StepBudget`, adding the iterations beyond the last when they retire, or every iteration they completed when they do not (a stop between iterations, a fault, a declined port), and checking `used + completed iterations >= limit`.*
+
 ## 결정 3: 진행 중인 명령과 게이트 / Decision 3: an instruction in progress and gates
 
 게이트는 "그 주소의 명령이 실행되기 전"에 검사한다(#11). REP가 반복 도중에 멈춘 뒤 `Run`이 다시 불리면 EIP는 같은 명령을 가리키지만, 그 명령은 이미 실행 중이다. 그래서 그 자리에서 다시 `kGate`가 나면 안 된다. `Cpu`는 마지막 단계가 `kPartial`로 끝났을 때 그 명령의 선형 주소를 기억한다(`in_progress_`). 다음 `Run`은 현재 CS:EIP의 선형 주소가 같을 때만 게이트 검사를 건너뛴다. 단계 하나를 실행하면 기억을 지운다. 호스트가 그사이 EIP를 바꿨다면 주소가 달라지므로 게이트 검사는 평소대로 한다.
@@ -92,9 +100,9 @@ flowchart TD
 
 * 아키텍처 결과: 정수·x87·SIMD 호스트 대조 fuzz, trace 묶음 전부, SST 174만 건이 그대로 통과한다. REP를 단계로 나눠 실행해도 최종 상태는 끝까지 한 번에 실행한 것과 같아야 한다.
 * 이 동등성은 단위 테스트로 고정한다. 같은 REP(MOVS, STOS, LODS, CMPS, SCAS, INS, OUTS, 16·32비트 주소, DF 0·1, REPE/REPNE 조기 종료)를 예산 1, 2, 7 등으로 나눠 실행한 결과가 한 번에 실행한 결과와 같은지 본다.
-* 성능: REP가 아닌 명령의 경로에는 허용 인자 하나가 더해질 뿐이다. 벤치마크의 `alu`·`memory`·`call`이 잡음 범위 안이어야 한다. 반복마다 relaxed 읽기와 비교가 하나씩 늘므로, `string`은 단계 기준 전후를 잰다.
+* 성능: REP가 아닌 명령의 경로에는 `Ctx`에 포인터 하나를 옮기는 일만 더해진다. 벤치마크의 `alu`·`memory`·`call`이 잡음 범위 안이어야 한다. 반복마다 relaxed 읽기와 비교가 하나씩 늘므로, `string`은 단계 기준 전후를 잰다.
 
-*Architectural results: the integer, x87 and SIMD host comparison fuzz, every trace corpus and the 1.74M SST tests pass unchanged; running a REP in steps must end in the state running it at once does. Unit tests pin that equivalence: the same REP (MOVS, STOS, LODS, CMPS, SCAS, INS, OUTS; 16- and 32-bit addressing; DF 0 and 1; REPE/REPNE ending early) run in budgets of 1, 2, 7 and so on must equal one uninterrupted run. Performance: the path of instructions other than REP strings gains one allowance argument, and the benchmark's `alu`, `memory` and `call` must stay within the noise; each iteration gains a relaxed load and a compare, so `string` is measured before and after in steps.*
+*Architectural results: the integer, x87 and SIMD host comparison fuzz, every trace corpus and the 1.74M SST tests pass unchanged; running a REP in steps must end in the state running it at once does. Unit tests pin that equivalence: the same REP (MOVS, STOS, LODS, CMPS, SCAS, INS, OUTS; 16- and 32-bit addressing; DF 0 and 1; REPE/REPNE ending early) run in budgets of 1, 2, 7 and so on must equal one uninterrupted run. Performance: the path of instructions other than REP strings gains only one pointer copied into `Ctx`, and the benchmark's `alu`, `memory` and `call` must stay within the noise; each iteration gains a relaxed load and a compare, so `string` is measured before and after in steps.*
 
 ## 소비자 영향 / Consumer impact
 

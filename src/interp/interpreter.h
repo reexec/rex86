@@ -44,6 +44,8 @@ enum class StepStatus : std::uint8_t
     kUnimplemented,
 };
 
+struct StepBudget;
+
 struct StepResult
 {
     StepStatus status = StepStatus::kRetired;
@@ -51,6 +53,11 @@ struct StepResult
     // MOV SS, POP SS or an IF-enabling STI retired: no external interrupt
     // at the next boundary.
     bool inhibit_interrupts = false;
+    // An input, not a result: the budget RunBlock lends a REP string
+    // (design #32), null elsewhere. It rides here because the block loop
+    // passes its StepResult to every instruction already; a seventh
+    // argument went on the stack and cost the hot loop a few percent.
+    StepBudget* budget = nullptr;
 };
 
 // Executes one instruction at CS:EIP, a REP string to completion. With a

@@ -109,9 +109,9 @@ ExecStatus ExecuteStrings(Ctx* ctx, Event* stop_event)
                        (ZYDIS_ATTRIB_HAS_REP | ZYDIS_ATTRIB_HAS_REPE)) != 0;
 
     ctx->keep_partial_state = has_rep;
-    // Completed iterations, counted as they finish and reported on every way
-    // out, so that a fault or a declined port says how many steps became
-    // architectural (design #32).
+    // Completed iterations, counted as they finish and added to the block's
+    // steps on every way out, so that a fault or a declined port says how
+    // many steps became architectural (design #32).
     struct StepReport
     {
         StepBudget* budget;
@@ -120,7 +120,7 @@ ExecStatus ExecuteStrings(Ctx* ctx, Event* stop_event)
         {
             if (budget != nullptr)
             {
-                budget->string_steps = steps;
+                budget->used += steps;
             }
         }
     } report{ctx->budget};
@@ -280,17 +280,18 @@ ExecStatus ExecuteStrings(Ctx* ctx, Event* stop_event)
         // when the budget or the Cpu's loop needs it (design #32).
         const StepBudget* budget = ctx->budget;
         if (budget != nullptr &&
-            (report.steps >= budget->allowance ||
+            (budget->used + report.steps >= budget->limit ||
              (budget->attention != nullptr &&
               budget->attention->load(std::memory_order_relaxed))))
         {
             return ExecStatus::kPartial;
         }
     }
-    // A REP that ran no iteration still retires, as one step.
-    if (report.steps == 0)
+    // The instruction retires: RunBlock counts its last step, or the one
+    // step of a REP that ran no iteration.
+    if (report.steps != 0)
     {
-        report.steps = 1;
+        --report.steps;
     }
     return ExecStatus::kContinue;
 }
