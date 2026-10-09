@@ -23,6 +23,7 @@ int main()
     RunSseTests(context);
     RunSseFloatTests(context);
     RunRobustTests(context);
+    RunDecodeCacheTests(context);
 
     std::printf("[rex86-unit-tests] checks=%d failures=%d\n", context.checks, context.failures);
     return context.failures == 0 ? 0 : 1;

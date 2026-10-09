@@ -1,6 +1,11 @@
 #include "interp/interpreter.h"
 
+#include <algorithm>
+#include <cstring>
+#include <optional>
+
 #include "decode/decoder.h"
+#include "interp/decode_cache.h"
 #include "interp/access.h"
 #include "interp/exec.h"
 #include "interp/flags.h"
@@ -756,68 +761,113 @@ bool FeatureEnabled(const decode::DecodedInstruction& decoded, const Features& f
     }
 }
 
+// Fetches up to 15 bytes at CS:EIP into bytes, stopping at the segment
+// limit or the first unfetchable byte, exactly as a byte-by-byte fetch
+// would: each page is checked once and read in one piece (design #34,
+// decision 3). EIP is not wrapped here: sequential execution past a 16-bit
+// segment's 0xFFFF leaves EIP at 0x10000 on real hardware, and the next
+// fetch is what faults.
+unsigned Fetch(const CpuState& state, const GuestMemory& memory, std::uint8_t* bytes,
+               bool* stopped_at_limit)
+{
+    const SegmentRegister& cs = state.Seg(Segment::kCs);
+    const std::uint32_t offset = state.eip;
+    unsigned window = kMaxInstructionBytes;
+    *stopped_at_limit = false;
+    if (!cs.IsFlat())
+    {
+        const std::uint64_t room =
+            !cs.present || offset > cs.limit ? 0u : static_cast<std::uint64_t>(cs.limit) - offset + 1u;
+        if (room < window)
+        {
+            window = static_cast<unsigned>(room);
+            *stopped_at_limit = true;
+        }
+    }
+    unsigned fetched = 0;
+    std::uint32_t linear = cs.base + offset;
+    while (fetched < window)
+    {
+        if (!memory.Contains(linear, 1) || !Has(memory.pages().Get(linear), kPageReadExecute))
+        {
+            // A page stops the fetch before the limit does.
+            *stopped_at_limit = false;
+            break;
+        }
+        const std::uint32_t in_page = kGuestPageSize - (linear & (kGuestPageSize - 1u));
+        const std::uint32_t in_buffer = memory.size() - linear;
+        const unsigned chunk = static_cast<unsigned>(
+            std::min<std::uint32_t>({window - fetched, in_page, in_buffer}));
+        std::memcpy(bytes + fetched, memory.HostPointer(linear, chunk), chunk);
+        fetched += chunk;
+        linear += chunk;
+    }
+    return fetched;
+}
+
 }  // namespace
 
 StepResult Step(CpuState& state, GuestMemory& memory,
-                Environment& environment, const Features& features)
+                Environment& environment, const Features& features,
+                DecodeCache* cache)
 {
     StepResult result;
     const SegmentRegister& cs = state.Seg(Segment::kCs);
     const std::uint32_t start_offset = state.eip;
+    const std::uint32_t start_linear = cs.base + start_offset;
 
-    // Fetch up to 15 bytes, stopping early at the segment limit or an
-    // unfetchable page. At least one byte must be fetchable. EIP is not
-    // wrapped here: sequential execution past a 16-bit segment's 0xFFFF
-    // leaves EIP at 0x10000 on real hardware, and the next fetch is what
-    // faults.
-    std::uint8_t bytes[kMaxInstructionBytes] = {};
-    unsigned fetched = 0;
-    bool stopped_at_limit = false;
-    for (; fetched < kMaxInstructionBytes; ++fetched)
+    // The decode cache first (design #34); on a miss, fetch and decode
+    // straight into the slot the cache hands out, or into a local when
+    // there is no cache.
+    const decode::DecodedInstruction* instruction =
+        cache != nullptr
+            ? cache->Lookup(start_linear, start_offset, cs.default_32bit, cs, memory)
+            : nullptr;
+    std::optional<decode::DecodedInstruction> local;
+    if (instruction == nullptr)
     {
-        const std::uint32_t offset = start_offset + fetched;
-        if (!cs.IsFlat() && (!cs.present || offset > cs.limit))
+        std::uint8_t bytes[kMaxInstructionBytes] = {};
+        bool stopped_at_limit = false;
+        const unsigned fetched = Fetch(state, memory, bytes, &stopped_at_limit);
+        // An instruction that does not fit below the CS limit is #GP (SDM);
+        // a fetch cut short by page attributes is the host's access
+        // violation.
+        if (fetched == 0)
         {
-            stopped_at_limit = true;
-            break;
-        }
-        const std::uint32_t linear = cs.base + offset;
-        if (!memory.pages().AllHave(linear, 1, kPageReadExecute) ||
-            !memory.Read8(linear, &bytes[fetched]))
-        {
-            break;
-        }
-    }
-    // An instruction that does not fit below the CS limit is #GP (SDM); a
-    // fetch cut short by page attributes is the host's access violation.
-    if (fetched == 0)
-    {
-        result.status = StepStatus::kFaulted;
-        result.event.reason = StopReason::kFault;
-        result.event.fault_kind = stopped_at_limit
-            ? FaultKind::kGeneralProtection
-            : FaultKind::kAccessViolation;
-        result.event.fault_address = cs.base + start_offset;
-        result.event.fault_on_fetch = true;
-        return result;
-    }
-
-    decode::DecodedInstruction decoded;
-    bool truncated = false;
-    if (!DecoderFor(cs.default_32bit)
-             .Decode(bytes, fetched, state.eip, &decoded, &truncated))
-    {
-        result.status = StepStatus::kFaulted;
-        result.event.reason = StopReason::kFault;
-        result.event.fault_kind = FaultKind::kIllegalInstruction;
-        if (stopped_at_limit && truncated)
-        {
-            result.event.fault_kind = FaultKind::kGeneralProtection;
+            result.status = StepStatus::kFaulted;
+            result.event.reason = StopReason::kFault;
+            result.event.fault_kind = stopped_at_limit
+                ? FaultKind::kGeneralProtection
+                : FaultKind::kAccessViolation;
+            result.event.fault_address = start_linear;
             result.event.fault_on_fetch = true;
+            return result;
         }
-        result.event.fault_address = cs.base + start_offset;
-        return result;
+
+        decode::DecodedInstruction* target =
+            cache != nullptr ? cache->Claim(start_linear) : &local.emplace();
+        bool truncated = false;
+        if (!DecoderFor(cs.default_32bit)
+                 .Decode(bytes, fetched, state.eip, target, &truncated))
+        {
+            result.status = StepStatus::kFaulted;
+            result.event.reason = StopReason::kFault;
+            result.event.fault_kind = FaultKind::kIllegalInstruction;
+            if (stopped_at_limit && truncated)
+            {
+                result.event.fault_kind = FaultKind::kGeneralProtection;
+                result.event.fault_on_fetch = true;
+            }
+            result.event.fault_address = start_linear;
+            return result;
+        }
+        if (cache != nullptr)
+        {
+            cache->Commit(start_linear, start_offset, cs.default_32bit, &memory);
+        }
+        instruction = target;
     }
+    const decode::DecodedInstruction& decoded = *instruction;
 
     if (!FeatureEnabled(decoded, features))
     {

@@ -33,8 +33,24 @@ bool PageRange(std::uint32_t address,
 
 PageAttributeTable::PageAttributeTable(std::uint32_t size_bytes)
     : flags_((static_cast<std::uint64_t>(size_bytes) + kGuestPageSize - 1) / kGuestPageSize,
-             PageFlag::kNone)
+             PageFlag::kNone),
+      generations_(flags_.size(), 0)
 {
+}
+
+void PageAttributeTable::Update(const std::uint32_t page, const PageFlag flags)
+{
+    if (Has(flags_[page], PageFlag::kTranslated) && !Has(flags, PageFlag::kTranslated))
+    {
+        ++generations_[page];
+    }
+    flags_[page] = flags;
+}
+
+std::uint32_t PageAttributeTable::Generation(std::uint32_t address) const
+{
+    const std::uint32_t page = address >> kGuestPageShift;
+    return page < generations_.size() ? generations_[page] : 0u;
 }
 
 PageFlag PageAttributeTable::Get(std::uint32_t address) const
@@ -57,7 +73,7 @@ bool PageAttributeTable::Set(std::uint32_t address, std::uint32_t size, PageFlag
     }
     for (std::uint32_t page = first; page <= last; ++page)
     {
-        flags_[page] = flags;
+        Update(page, flags);
     }
     return true;
 }
@@ -72,7 +88,7 @@ bool PageAttributeTable::Add(std::uint32_t address, std::uint32_t size, PageFlag
     }
     for (std::uint32_t page = first; page <= last; ++page)
     {
-        flags_[page] = flags_[page] | flags;
+        Update(page, flags_[page] | flags);
     }
     return true;
 }
@@ -88,7 +104,7 @@ bool PageAttributeTable::Remove(std::uint32_t address, std::uint32_t size, PageF
     const auto mask = static_cast<std::uint8_t>(~static_cast<std::uint8_t>(flags));
     for (std::uint32_t page = first; page <= last; ++page)
     {
-        flags_[page] = static_cast<PageFlag>(static_cast<std::uint8_t>(flags_[page]) & mask);
+        Update(page, static_cast<PageFlag>(static_cast<std::uint8_t>(flags_[page]) & mask));
     }
     return true;
 }

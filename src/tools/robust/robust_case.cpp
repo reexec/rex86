@@ -462,9 +462,16 @@ public:
             const auto now = static_cast<std::uint8_t>(pages.Get(p << kGuestPageShift));
             const auto was = static_cast<std::uint8_t>(initial_[p]);
             const auto translated = static_cast<std::uint8_t>(PageFlag::kTranslated);
-            if ((now & ~translated) != (was & ~translated) || (now & translated & ~was) != 0)
+            // Only kTranslated may change: cleared by a store or the host,
+            // set by the interpreter's decode cache on pages it executed
+            // (design #34, decision 5), which must be executable.
+            if ((now & ~translated) != (was & ~translated))
             {
                 return "I4: a page attribute changed";
+            }
+            if ((now & translated & ~was) != 0 && !Has(initial_[p], kPageReadExecute))
+            {
+                return "I4: kTranslated set on a page that is not executable";
             }
             if (Has(initial_[p], PageFlag::kMapped | PageFlag::kWrite))
             {

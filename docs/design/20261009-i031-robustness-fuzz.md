@@ -17,7 +17,7 @@ README 목표 6의 측정 수단 가운데 남은 "디코더·인터프리터 fu
 | I1 | 호스트 프로세스가 크래시하지 않는다 | 하네스가 끝까지 돈다. ASan/UBSan 보고 0 |
 | I2 | 게스트는 `GuestMemory` 버퍼 밖을 읽거나 쓰지 않는다 | 버퍼 앞뒤에 보호 구역. ASan 빌드는 그 구역을 poison해 읽기도 잡고, 그 밖의 빌드는 쓰기를 canary로 잡는다 |
 | I3 | 게스트는 쓰기 권한(`kMapped` + `kWrite`)이 없는 페이지를 바꾸지 않는다 | 케이스 시작 때 그런 페이지의 내용을 떠 두고 매 `Run` 뒤 비교 |
-| I4 | 코어는 페이지 속성을 `kTranslated`를 지우는 것 말고 바꾸지 않는다 | 속성표 비교 |
+| I4 | 코어는 페이지 속성을 `kTranslated` 말고는 바꾸지 않는다. `kTranslated`는 실행 가능한 페이지에만 선다(#34의 디코드 캐시가 세운다) | 속성표 비교 |
 | I5 | `Run(budget)`의 이벤트가 계약대로다: retire 수 ≤ budget, `kBudgetExhausted`면 = budget, `kFault`면 `fault_kind` ≠ `kNone`, `kGate`면 등록된 게이트 주소, 열거값은 정의된 범위 | 매 `Run` 뒤 |
 | I6 | 결정적이다: 같은 케이스를 두 번 돌리면 이벤트 열, 최종 상태, 메모리가 같다 | 케이스마다 두 번 실행 비교. 초기화되지 않은 값을 읽는 결함을 잡고, 목표 2(호스트 무관한 결과)의 전제이기도 하다 |
 
@@ -39,7 +39,7 @@ flowchart TD
     X -- "같음" --> N["다음 케이스"]
 ```
 
-*I1 the host process never crashes (the harness runs to the end, zero ASan/UBSan reports); I2 the guest never reads or writes outside the `GuestMemory` buffer (guard zones around it, poisoned for ASan builds so reads are caught too, canaries catching writes elsewhere); I3 the guest never changes a page without write permission (`kMapped` + `kWrite`), checked against a snapshot after every `Run`; I4 the core changes page attributes only by clearing `kTranslated`; I5 every `Run(budget)` event keeps the contract (retired ≤ budget, = budget on `kBudgetExhausted`, a fault kind on `kFault`, a registered address on `kGate`, enumerators in range); I6 determinism: the same case run twice gives the same events, final state and memory, which catches reads of uninitialized values and underlies goal 2. "Invalid input is an explicit fault" is I5's: an instruction the core does not understand must stop with `kIllegalInstruction`, never quietly succeed; measuring that further needs meaning and belongs to the host-comparison fuzzes.*
+*I1 the host process never crashes (the harness runs to the end, zero ASan/UBSan reports); I2 the guest never reads or writes outside the `GuestMemory` buffer (guard zones around it, poisoned for ASan builds so reads are caught too, canaries catching writes elsewhere); I3 the guest never changes a page without write permission (`kMapped` + `kWrite`), checked against a snapshot after every `Run`; I4 the core changes no page attribute but `kTranslated`, which it sets only on executable pages (#34's decode cache sets it); I5 every `Run(budget)` event keeps the contract (retired ≤ budget, = budget on `kBudgetExhausted`, a fault kind on `kFault`, a registered address on `kGate`, enumerators in range); I6 determinism: the same case run twice gives the same events, final state and memory, which catches reads of uninitialized values and underlies goal 2. "Invalid input is an explicit fault" is I5's: an instruction the core does not understand must stop with `kIllegalInstruction`, never quietly succeed; measuring that further needs meaning and belongs to the host-comparison fuzzes.*
 
 ## 결정 2: 케이스 생성 / Decision 2: case generation
 

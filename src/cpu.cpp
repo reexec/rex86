@@ -1,5 +1,6 @@
 #include "rex86/cpu.h"
 
+#include "interp/decode_cache.h"
 #include "interp/interpreter.h"
 
 namespace rex86
@@ -14,12 +15,35 @@ Cpu::Cpu(GuestMemory* memory,
     state_.Reset();
 }
 
+Cpu::~Cpu() = default;
+Cpu::Cpu(Cpu&&) noexcept = default;
+Cpu& Cpu::operator=(Cpu&&) noexcept = default;
+
+namespace
+{
+
+// Instructions retired before a Cpu makes its decode cache (design #34).
+// A build may set it to 0 so that every test and fuzz runs through the
+// cache (CI's sanitizer job does).
+#if defined(REX86_DECODE_CACHE_WARMUP)
+constexpr std::uint64_t kDecodeCacheWarmup = REX86_DECODE_CACHE_WARMUP;
+#else
+constexpr std::uint64_t kDecodeCacheWarmup = 64;
+#endif
+
+}  // namespace
+
 Engine Cpu::ActiveEngine() const
 {
     // The interpreter exists from task #11 on. A translation backend will
     // answer kTranslator here only when code_cache_ is non-null and the
     // backend is built.
     return Engine::kInterpreter;
+}
+
+std::size_t Cpu::EngineMemoryBytes() const
+{
+    return decode_cache_ ? decode_cache_->FootprintBytes() : 0u;
 }
 
 void Cpu::RegisterGate(std::uint32_t linear_address)
@@ -67,6 +91,13 @@ void Cpu::ClearPendingInterrupt(std::uint8_t vector)
 
 Event Cpu::Run(std::uint64_t instruction_budget)
 {
+    const Event event = RunUntilStop(instruction_budget);
+    retired_total_ += event.instructions_retired;
+    return event;
+}
+
+Event Cpu::RunUntilStop(std::uint64_t instruction_budget)
+{
     // The loop owns what is not an instruction's semantics: stop requests,
     // gates (checked before the instruction at the gate runs), external
     // interrupt delivery at boundaries with IF set, and the budget. The
@@ -88,7 +119,7 @@ Event Cpu::Run(std::uint64_t instruction_budget)
         const std::uint32_t ip_mask =
             cs.default_32bit ? 0xFFFFFFFFu : 0xFFFFu;
         const std::uint32_t linear = cs.base + (state_.eip & ip_mask);
-        if (IsGate(linear))
+        if (!gates_.empty() && IsGate(linear))
         {
             event.reason = StopReason::kGate;
             event.gate_address = linear;
@@ -130,8 +161,12 @@ Event Cpu::Run(std::uint64_t instruction_budget)
             return event;
         }
 
+        if (!decode_cache_ && retired_total_ + retired >= kDecodeCacheWarmup)
+        {
+            decode_cache_ = std::make_unique<interp::DecodeCache>();
+        }
         const interp::StepResult step =
-            interp::Step(state_, *memory_, *environment_, features_);
+            interp::Step(state_, *memory_, *environment_, features_, decode_cache_.get());
         interrupt_shadow_ = step.inhibit_interrupts;
         switch (step.status)
         {

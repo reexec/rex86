@@ -234,6 +234,15 @@ void FeatureTests(rex86::test::Context& context)
     // 66-prefixed MMX forms are SSE2.
     REX86_CHECK(context, run({0x66, 0x0F, 0xFC, 0xC1}, rex86::Features{}).fault_kind ==
                              FaultKind::kIllegalInstruction);
+    // SSE2's MM-register forms stay #UD even with sse2 turned on: CVTPD2PI
+    // mm0, [ebx] reads an m128, which once overflowed an 8-byte buffer
+    // (robustness harness, seed 5046451, #34).
+    rex86::Features with_sse2;
+    with_sse2.sse2 = true;
+    REX86_CHECK(context, run({0x66, 0x0F, 0x2D, 0x03}, with_sse2).fault_kind ==
+                             FaultKind::kIllegalInstruction);
+    REX86_CHECK(context, run({0x0F, 0xD4, 0xC1}, with_sse2).fault_kind ==  // paddq mm0, mm1
+                             FaultKind::kIllegalInstruction);
 }
 
 }  // namespace

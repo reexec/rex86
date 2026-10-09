@@ -2,7 +2,9 @@
 #define REX86_CPU_H_
 
 #include <bitset>
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <unordered_set>
 
 #include "rex86/cpu_state.h"
@@ -15,6 +17,11 @@
 // this shape), so the core creates no host threads of its own.
 namespace rex86
 {
+
+namespace interp
+{
+class DecodeCache;
+}
 
 enum class Engine : std::uint8_t
 {
@@ -33,6 +40,10 @@ public:
         Environment* environment,
         const Features& features,
         CodeCacheServices* code_cache = nullptr);
+    ~Cpu();
+    // Movable, not copyable: a Cpu owns its interpreter's decode cache.
+    Cpu(Cpu&&) noexcept;
+    Cpu& operator=(Cpu&&) noexcept;
 
     [[nodiscard]] CpuState& state()
     {
@@ -69,6 +80,12 @@ public:
     // Which engine Run would use. kNone until an engine exists.
     [[nodiscard]] Engine ActiveEngine() const;
 
+    // Bytes the engines hold beyond the Cpu itself: today the interpreter's
+    // decode cache, made after a short warm-up (design #34); the
+    // translation backends' code caches join it. For goal 7's resource
+    // instrumentation.
+    [[nodiscard]] std::size_t EngineMemoryBytes() const;
+
     // Gates: linear addresses at which execution stops with kGate before
     // the instruction there runs.
     void RegisterGate(std::uint32_t linear_address);
@@ -102,10 +119,15 @@ public:
 
     // Tells the engines that [address, address + size) changed under them,
     // as when the host writes code into guest memory. Clears kTranslated on
-    // those pages.
+    // those pages, which raises their generation and drops every cached
+    // decode or translation over them. The interpreter caches decodes too
+    // (design #34), so a host changing code that has already run must call
+    // this.
     void InvalidateCode(std::uint32_t address, std::uint32_t size);
 
 private:
+    Event RunUntilStop(std::uint64_t instruction_budget);
+
     CpuState state_;
     GuestMemory* memory_ = nullptr;
     Environment* environment_ = nullptr;
@@ -114,6 +136,10 @@ private:
     std::unordered_set<std::uint32_t> gates_;
     std::bitset<256> pending_interrupts_;
     bool stop_requested_ = false;
+    // The interpreter's decode cache, made once the Cpu has retired
+    // kDecodeCacheWarmup instructions so short-lived Cpus never pay for it.
+    std::unique_ptr<interp::DecodeCache> decode_cache_;
+    std::uint64_t retired_total_ = 0;
     // Set for one boundary after MOV SS, POP SS or an IF-enabling STI.
     bool interrupt_shadow_ = false;
 };

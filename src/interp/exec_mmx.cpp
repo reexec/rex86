@@ -308,7 +308,12 @@ ExecStatus ExecuteMmx(Ctx* ctx)
 {
     const decode::DecodedInstruction& d = ctx->decoded;
     const ZydisMnemonic m = d.instruction.mnemonic;
-    if (m != ZYDIS_MNEMONIC_EMMS && !UsesMmx(d))
+    // MMX and SSE only: SSE2's MM-register forms (CVTPD2PI with an m128
+    // source, PADDQ, ...) are out of scope and stay #UD even when a host
+    // turns Features::sse2 on (found by the robustness harness, #34).
+    const ZydisISASet isa = d.instruction.meta.isa_set;
+    if ((isa != ZYDIS_ISA_SET_PENTIUMMMX && isa != ZYDIS_ISA_SET_SSE) ||
+        (m != ZYDIS_MNEMONIC_EMMS && !UsesMmx(d)))
     {
         return ExecStatus::kUnimplemented;
     }

@@ -72,5 +72,6 @@ void RunMmxTests(rex86::test::Context& context);
 void RunSseTests(rex86::test::Context& context);
 void RunSseFloatTests(rex86::test::Context& context);
 void RunRobustTests(rex86::test::Context& context);
+void RunDecodeCacheTests(rex86::test::Context& context);
 
 #endif  // REX86_TESTS_UNIT_TEST_SUPPORT_H_

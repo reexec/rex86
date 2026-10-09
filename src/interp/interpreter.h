@@ -16,6 +16,8 @@
 namespace rex86::interp
 {
 
+class DecodeCache;
+
 enum class StepStatus : std::uint8_t
 {
     // The instruction retired; state advanced.
@@ -45,9 +47,12 @@ struct StepResult
     bool inhibit_interrupts = false;
 };
 
-// Executes one instruction at CS:EIP.
+// Executes one instruction at CS:EIP. With a cache, decodes are kept and
+// reused while their pages' generations hold (design #34); without one,
+// every instruction is fetched and decoded afresh.
 StepResult Step(CpuState& state, GuestMemory& memory,
-                Environment& environment, const Features& features);
+                Environment& environment, const Features& features,
+                DecodeCache* cache = nullptr);
 
 // Pushes the FLAGS/CS/IP frame for an accepted external interrupt, clears
 // IF and TF and jumps to the target the host supplied. Returns false with
