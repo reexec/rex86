@@ -198,6 +198,7 @@ if(REX86_BUILD_TESTS)
         tests/unit/robust_test.cpp
         tests/unit/decode_cache_test.cpp
         tests/unit/block_test.cpp
+        tests/unit/rep_budget_test.cpp
         src/tools/census/census.cpp
         src/tools/sst/moo_reader.cpp
     )

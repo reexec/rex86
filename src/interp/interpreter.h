@@ -33,6 +33,11 @@ enum class StepStatus : std::uint8_t
     // (a declined INS/OUTS iteration). Completed iterations are
     // architectural; resuming re-executes with what remains.
     kStopped,
+    // A REP string stopped between iterations without an event: its step
+    // allowance ran out or attention was raised (design #32). Completed
+    // iterations are architectural, EIP still addresses the instruction,
+    // and executing it again continues with what remains.
+    kPartial,
     // The mnemonic decodes but this increment does not implement it. The
     // event carries kIllegalInstruction; callers inside the repository
     // (the SST runner) use the distinction to count coverage honestly.
@@ -48,9 +53,10 @@ struct StepResult
     bool inhibit_interrupts = false;
 };
 
-// Executes one instruction at CS:EIP. With a cache, decodes are kept and
-// reused while their pages' generations hold (design #34); without one,
-// every instruction is fetched and decoded afresh.
+// Executes one instruction at CS:EIP, a REP string to completion. With a
+// cache, decodes are kept and reused while their pages' generations hold
+// (design #34); without one, every instruction is fetched and decoded
+// afresh.
 StepResult Step(CpuState& state, GuestMemory& memory,
                 Environment& environment, const Features& features,
                 DecodeCache* cache = nullptr);
@@ -78,10 +84,12 @@ struct GateFilter
 
 struct BlockLimits
 {
-    // At least one instruction runs; the block stops once this many retired.
-    std::uint64_t max_instructions = 1;
-    // Read before every instruction after the first: the Cpu raises it for a
-    // stop request or a pending interrupt, which its loop handles.
+    // At least one step runs; the block stops once this many ran, a REP
+    // string between its iterations if need be (design #32).
+    std::uint64_t max_steps = 1;
+    // Read before every instruction after the first and between a REP
+    // string's iterations: the Cpu raises it for a stop request or a
+    // pending interrupt, which its loop handles.
     const std::atomic<bool>* attention = nullptr;
     // Null when the Cpu has no gates.
     const GateFilter* gates = nullptr;
@@ -89,15 +97,16 @@ struct BlockLimits
 
 struct BlockResult
 {
-    // The last instruction's result; kRetired when the block ended on a
-    // limit rather than an event.
+    // The last instruction's result; kRetired or kPartial when the block
+    // ended on a limit rather than an event.
     StepResult last;
-    std::uint64_t retired = 0;
+    std::uint64_t steps = 0;
 };
 
 // Executes instructions from CS:EIP as Step would, one after another, until
 // one does not simply retire, the limit is reached, attention is raised, or
-// the next instruction may be at a gate. Every instruction keeps Step's
+// the next instruction may be at a gate. A REP string stops between
+// iterations on the limit or attention (kPartial). Every instruction keeps Step's
 // semantics, precise faults included; only the Cpu loop's checks between
 // instructions are skipped while nothing can need them.
 BlockResult RunBlock(CpuState& state, GuestMemory& memory,

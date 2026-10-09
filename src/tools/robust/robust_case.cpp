@@ -394,7 +394,7 @@ std::uint64_t DigestEvent(std::uint64_t h, const Event& e)
     h = FnvValue(h, e.port);
     h = FnvValue(h, e.port_width);
     h = FnvValue(h, e.port_value);
-    return FnvValue(h, e.instructions_retired);
+    return FnvValue(h, e.steps);
 }
 
 // I5: the event keeps the Run contract.
@@ -410,11 +410,11 @@ std::string CheckEvent(const Event& e, const std::uint64_t budget, const bool st
     {
         return "I5: kNoEngine from a core with an interpreter";
     }
-    if (e.instructions_retired > budget)
+    if (e.steps > budget)
     {
-        return "I5: retired more than the budget";
+        return "I5: ran more steps than the budget";
     }
-    if (e.reason == StopReason::kBudgetExhausted && e.instructions_retired != budget)
+    if (e.reason == StopReason::kBudgetExhausted && e.steps != budget)
     {
         return "I5: kBudgetExhausted before the budget ran out";
     }
@@ -559,7 +559,7 @@ CaseResult Execute(Random& random, const int sabotage, const std::uint8_t* code,
         if (sabotage == 3)
         {
             event.reason = StopReason::kBudgetExhausted;
-            event.instructions_retired = budget + 1;
+            event.steps = budget + 1;
         }
         if (sabotage == 1 && run == 0)
         {
@@ -570,7 +570,7 @@ CaseResult Execute(Random& random, const int sabotage, const std::uint8_t* code,
             arena.TamperGuard();
         }
         ++result.stats.runs;
-        result.stats.retired += event.instructions_retired;
+        result.stats.retired += event.steps;
         result.stats.reasons[static_cast<std::size_t>(event.reason) & 7u]++;
         if (event.reason == StopReason::kFault)
         {

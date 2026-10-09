@@ -45,6 +45,10 @@
 
 *Confirmed by reading the code: a REP string runs to completion within one Step, so with 32-bit addressing and a large ECX one instruction covers the contiguous mapped region. Not a crash but a goal 8 (responsiveness) problem, handed to #32; the harness bounds memory at 1 MiB to bound a case's time.*
 
+**해소됨(2026-10-10, [#32](https://github.com/reexec/rex86/issues/32))**: REP 문자열은 이제 반복마다 한 단계로 세고, 예산, 정지 요청, 대기 인터럽트가 반복 사이에서 명령을 멈춘다. 그래서 `Run(budget)`의 일은 메모리 크기와 상관없이 budget 단계로 묶인다(단위 테스트 `rep_budget_test.cpp`). 하네스의 1 MiB 상한은 시드별 재현을 지키려고 그대로 둔다.
+
+*Resolved (2026-10-10, #32): a REP string now counts one step per iteration, and the budget, a stop request or a pending interrupt stops it between iterations, so `Run(budget)`'s work is bounded at budget steps whatever the memory size (unit test `rep_budget_test.cpp`). The harness keeps its 1 MiB bound so that per-seed reproduction holds.*
+
 ## 4. 미확정 / Unresolved
 
 * **번역 백엔드**: 없음. 3단계에서 같은 하네스가 차등 비교로 넓힌다.

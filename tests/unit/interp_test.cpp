@@ -126,7 +126,7 @@ void RunInterpTests(rex86::test::Context& context)
                    0xF4});
         const rex86::Event event = m.cpu.Run(100);
         REX86_CHECK(context, event.reason == StopReason::kHalted);
-        REX86_CHECK_EQ(context, event.instructions_retired, std::uint64_t{3});
+        REX86_CHECK_EQ(context, event.steps, std::uint64_t{3});
         REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEax), 8u);
         // HLT retired, so EIP points past it.
         REX86_CHECK_EQ(context, m.cpu.state().eip, Machine::kCodeBase + 9);
@@ -200,14 +200,14 @@ void RunInterpTests(rex86::test::Context& context)
         const rex86::Event event = m.cpu.Run(100);
         REX86_CHECK(context, event.reason == StopReason::kGate);
         REX86_CHECK_EQ(context, event.gate_address, Machine::kCodeBase + 1);
-        REX86_CHECK_EQ(context, event.instructions_retired, std::uint64_t{1});
+        REX86_CHECK_EQ(context, event.steps, std::uint64_t{1});
     }
     {
         // The budget stops without an event from the guest.
         Machine m({0x90, 0x90, 0x90, 0x90, 0xF4});
         const rex86::Event event = m.cpu.Run(2);
         REX86_CHECK(context, event.reason == StopReason::kBudgetExhausted);
-        REX86_CHECK_EQ(context, event.instructions_retired, std::uint64_t{2});
+        REX86_CHECK_EQ(context, event.steps, std::uint64_t{2});
     }
     {
         // INT n retires and stops with its vector; EIP points after it.
@@ -245,7 +245,7 @@ void RunInterpTests(rex86::test::Context& context)
         REX86_CHECK(context,
                     event.fault_kind == rex86::FaultKind::kAccessViolation);
         REX86_CHECK(context, event.fault_on_write);
-        REX86_CHECK_EQ(context, event.instructions_retired, std::uint64_t{1});
+        REX86_CHECK_EQ(context, event.steps, std::uint64_t{1});
         REX86_CHECK_EQ(context, m.cpu.state().eip, Machine::kCodeBase + 5);
     }
     {
@@ -287,7 +287,7 @@ void RunInterpTests(rex86::test::Context& context)
         REX86_CHECK(context, event.reason == StopReason::kFault);
         REX86_CHECK(context,
                     event.fault_kind == rex86::FaultKind::kIllegalInstruction);
-        REX86_CHECK_EQ(context, event.instructions_retired, std::uint64_t{0});
+        REX86_CHECK_EQ(context, event.steps, std::uint64_t{0});
     }
 
     // --- increment 2 (#13) ---
@@ -334,7 +334,7 @@ void RunInterpTests(rex86::test::Context& context)
         const rex86::Event event = m.cpu.Run(100);
         REX86_CHECK(context, event.reason == StopReason::kFault);
         REX86_CHECK(context, event.fault_kind == rex86::FaultKind::kDivide);
-        REX86_CHECK_EQ(context, event.instructions_retired, std::uint64_t{1});
+        REX86_CHECK_EQ(context, event.steps, std::uint64_t{1});
         REX86_CHECK_EQ(context, m.cpu.state().eip, Machine::kCodeBase + 2);
     }
     {
@@ -360,7 +360,8 @@ void RunInterpTests(rex86::test::Context& context)
                             reinterpret_cast<const std::uint8_t*>(source), 4);
         const rex86::Event event = m.cpu.Run(100);
         REX86_CHECK(context, event.reason == StopReason::kHalted);
-        REX86_CHECK_EQ(context, event.instructions_retired, std::uint64_t{5});
+        // Three MOVs, an iteration a step (design #32), and HLT.
+        REX86_CHECK_EQ(context, event.steps, std::uint64_t{8});
         std::uint32_t copied = 0;
         m.memory.Read32(0x3000, &copied);
         REX86_CHECK_EQ(context, copied, 0x21786572u);  // "rex!"
@@ -498,7 +499,7 @@ void RunInterpTests(rex86::test::Context& context)
         // boundary right after STI, so NOP runs first: two retired.
         rex86::Event event = m.cpu.Run(100);
         REX86_CHECK(context, event.reason == StopReason::kSoftwareInterrupt);
-        REX86_CHECK_EQ(context, event.instructions_retired, std::uint64_t{2});
+        REX86_CHECK_EQ(context, event.steps, std::uint64_t{2});
         // Clear it and check MOV SS's own shadow: the shadow persists
         // across Run calls.
         m.cpu.ClearPendingInterrupt(0x20);
@@ -507,7 +508,7 @@ void RunInterpTests(rex86::test::Context& context)
         m.cpu.RaiseInterrupt(0x20);
         event = m.cpu.Run(100);
         REX86_CHECK(context, event.reason == StopReason::kSoftwareInterrupt);
-        REX86_CHECK_EQ(context, event.instructions_retired, std::uint64_t{1});
+        REX86_CHECK_EQ(context, event.steps, std::uint64_t{1});
     }
     {
         // A declined REP OUTSB stops restartably: completed iterations
@@ -522,7 +523,8 @@ void RunInterpTests(rex86::test::Context& context)
         const rex86::Event event = m.cpu.Run(100);
         REX86_CHECK(context, event.reason == StopReason::kPortIo);
         REX86_CHECK(context, event.port_is_write);
-        REX86_CHECK_EQ(context, event.instructions_retired, std::uint64_t{3});
+        // Three MOVs and the one iteration completed (design #32).
+        REX86_CHECK_EQ(context, event.steps, std::uint64_t{4});
         REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEcx), 2u);
         REX86_CHECK_EQ(context, m.cpu.state().Get(Gpr::kEsi), 0x2001u);
         REX86_CHECK_EQ(context, m.cpu.state().eip, Machine::kCodeBase + 14);

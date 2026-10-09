@@ -11,10 +11,10 @@
 * EFLAGS.TF(비트 8)가 **명령 시작 시점에** 켜져 있으면, 그 명령이 끝난 뒤 #DB(벡터 1) 트랩이 온다. POPF/POPFD가 TF를 켜면 POPF 자신이 아니라 **다음 명령** 뒤에 트랩이 온다. 그래서 `popfd; <명령>`이 "그 명령 하나 실행"이 된다.
 * 트랩은 명령 완료 뒤, 다음 명령 인출 전에 온다. 분기, CALL, RET이 어디로 가든 목적지는 인출되지 않고 보고된 EIP가 목적지다.
 * 명령이 폴트를 내면 트랩 대신 그 폴트가 오고, 보고되는 상태는 명령 시작 전 상태다(폴트의 정확성).
-* REP 문자열은 **반복마다** 단일 스텝 트랩을 낸다. 반복 중이면 보고된 EIP가 명령 시작 주소다.
+* REP 문자열은 **반복마다** 단일 스텝 트랩을 낸다. 반복 중이면 보고된 EIP가 명령 시작 주소다. 같은 상태가 인터럽트나 예외로 중단된 REP에도 정의되어 있다(SDM Vol. 2B REP 항목): 원본·목적지 레지스터는 다음 원소를, EIP는 문자열 명령을, ECX는 마지막으로 성공한 반복 뒤의 값을 가리키고, 처리기에서 돌아오면 이어서 실행된다. 코어의 예산 단위인 단계가 이것이다(#32).
 * TF를 끄는 명령(TF=0인 값을 꺼낸 POPF)은 트랩을 내지 않는다. 명령 뒤에 INT3를 두면 그것이 잡는다.
 
-*With EFLAGS.TF set **when an instruction starts**, a #DB trap (vector 1) follows its completion; a POPF/POPFD that sets TF traps after the **next** instruction, not itself, so `popfd; <instruction>` means "run exactly that instruction". The trap arrives after completion and before the next fetch, so wherever a branch, CALL or RET goes, the target is never fetched and the reported EIP is the target. A faulting instruction delivers its fault instead, with the pre-instruction state (precise faults). REP strings trap after **every iteration**, reporting the instruction's own address while iterations remain. An instruction that clears TF (a POPF popping TF = 0) does not trap; an INT3 placed after the instruction catches it.*
+*With EFLAGS.TF set **when an instruction starts**, a #DB trap (vector 1) follows its completion; a POPF/POPFD that sets TF traps after the **next** instruction, not itself, so `popfd; <instruction>` means "run exactly that instruction". The trap arrives after completion and before the next fetch, so wherever a branch, CALL or RET goes, the target is never fetched and the reported EIP is the target. A faulting instruction delivers its fault instead, with the pre-instruction state (precise faults). REP strings trap after **every iteration**, reporting the instruction's own address while iterations remain; the SDM (Vol. 2B, REP) defines the same state for a REP suspended by an interrupt or exception, the source and destination registers at the next elements, EIP at the string instruction and ECX as the last successful iteration left it, the handler's return resuming it, and that is the core's budget unit, the step (#32). An instruction that clears TF (a POPF popping TF = 0) does not trap; an INT3 placed after the instruction catches it.*
 
 ## Linux i386에서의 신호 대응 / The signal mapping on Linux i386
 

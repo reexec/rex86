@@ -103,7 +103,7 @@ int main()
     std::printf("[rex86-probe] engine=%s run=%s retired=%llu eflags=0x%08x x87_cw=0x%04x\n",
                 EngineName(cpu.ActiveEngine()),
                 StopReasonName(event.reason),
-                static_cast<unsigned long long>(event.instructions_retired),
+                static_cast<unsigned long long>(event.steps),
                 cpu.state().eflags,
                 cpu.state().x87.control_word);
     std::printf("[rex86-probe] result=ok\n");

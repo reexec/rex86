@@ -23,7 +23,8 @@ enum class StopReason : std::uint8_t
     // an explicit state, so that no caller mistakes an idle core for one
     // that ran.
     kNoEngine,
-    // The instruction budget ran out. Nothing else happened.
+    // The step budget ran out, possibly between a REP string's iterations
+    // (Cpu::InstructionInProgress). Nothing else happened.
     kBudgetExhausted,
     // Execution reached an address registered through Cpu::RegisterGate.
     // re2DJ's import thunks and rePIU's LINEXE gates arrive this way.
@@ -84,8 +85,11 @@ struct Event
     std::uint8_t port_width = 0;
     bool port_is_write = false;
     std::uint32_t port_value = 0;
-    // How many guest instructions the call retired before stopping.
-    std::uint64_t instructions_retired = 0;
+    // How many steps the call ran before stopping (design #32). A step is
+    // what one trap-flag single step runs: one instruction, or one
+    // iteration of a REP string (a REP with no iteration is one step).
+    // Iterations completed before a mid-string fault or declined port count.
+    std::uint64_t steps = 0;
 };
 
 // What the host answers when the guest loads a selector into a segment

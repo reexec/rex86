@@ -150,7 +150,7 @@ ExecStatus ExecAluBinary(Ctx* ctx, const ZydisMnemonic mnemonic)
 
 // One instruction's semantics, after a successful decode. next_eip is the
 // fallthrough; branch semantics overwrite it. On kStop, *stop_event is
-// complete apart from instructions_retired.
+// complete apart from Event::steps.
 ExecStatus Execute(Ctx* ctx, std::uint32_t* next_eip, Event* stop_event)
 {
     CpuState& s = ctx->state;
@@ -823,7 +823,7 @@ namespace
 // #35). Only status and inhibit_interrupts change on a plain retirement.
 inline void ExecuteDecoded(StepResult& result, CpuState& state, GuestMemory& memory,
                            Environment& environment, const Features& features,
-                           const decode::DecodedInstruction& decoded)
+                           const decode::DecodedInstruction& decoded, StepBudget* budget)
 {
     const SegmentRegister& cs = state.Seg(Segment::kCs);
     const std::uint32_t start_offset = state.eip;
@@ -847,6 +847,7 @@ inline void ExecuteDecoded(StepResult& result, CpuState& state, GuestMemory& mem
 
     Ctx ctx{state, memory, environment, decoded, Event{}, false};
     ctx.features = &features;
+    ctx.budget = budget;
     const std::uint32_t fallthrough = start_offset + decoded.Length();
     std::uint32_t next_eip = fallthrough;
     Event stop_event;
@@ -897,6 +898,11 @@ inline void ExecuteDecoded(StepResult& result, CpuState& state, GuestMemory& mem
             result.status = StepStatus::kStopped;
             result.event = stop_event;
             return;
+        case ExecStatus::kPartial:
+            // A REP string between iterations (design #32): EIP still
+            // addresses the instruction.
+            result.status = StepStatus::kPartial;
+            return;
         case ExecStatus::kFault:
             // The instruction did not retire; EIP still addresses it.
             result.status = StepStatus::kFaulted;
@@ -919,7 +925,7 @@ inline void ExecuteDecoded(StepResult& result, CpuState& state, GuestMemory& mem
 // per instruction (design #35).
 REX86_NOINLINE void StepMiss(StepResult& result, CpuState& state, GuestMemory& memory,
                              Environment& environment, const Features& features,
-                             DecodeCache* cache)
+                             DecodeCache* cache, StepBudget* budget)
 {
     const SegmentRegister& cs = state.Seg(Segment::kCs);
     const std::uint32_t start_offset = state.eip;
@@ -965,14 +971,14 @@ REX86_NOINLINE void StepMiss(StepResult& result, CpuState& state, GuestMemory& m
     {
         cache->Commit(start_linear, start_offset, cs.default_32bit, &memory);
     }
-    ExecuteDecoded(result, state, memory, environment, features, *target);
+    ExecuteDecoded(result, state, memory, environment, features, *target, budget);
 }
 
 // One instruction; Step and RunBlock share it so the block loop keeps it
 // inline. The decode cache first (design #34), the miss path otherwise.
 inline void StepOne(StepResult& result, CpuState& state, GuestMemory& memory,
                     Environment& environment, const Features& features,
-                    DecodeCache* cache)
+                    DecodeCache* cache, StepBudget* budget)
 {
     result.inhibit_interrupts = false;
     if (cache != nullptr)
@@ -982,11 +988,12 @@ inline void StepOne(StepResult& result, CpuState& state, GuestMemory& memory,
             cache->Lookup(cs.base + state.eip, state.eip, cs.default_32bit, cs, memory);
         if (instruction != nullptr)
         {
-            ExecuteDecoded(result, state, memory, environment, features, *instruction);
+            ExecuteDecoded(result, state, memory, environment, features, *instruction,
+                           budget);
             return;
         }
     }
-    StepMiss(result, state, memory, environment, features, cache);
+    StepMiss(result, state, memory, environment, features, cache, budget);
 }
 
 }  // namespace
@@ -996,7 +1003,7 @@ StepResult Step(CpuState& state, GuestMemory& memory,
                 DecodeCache* cache)
 {
     StepResult result;
-    StepOne(result, state, memory, environment, features, cache);
+    StepOne(result, state, memory, environment, features, cache, nullptr);
     return result;
 }
 
@@ -1005,19 +1012,30 @@ BlockResult RunBlock(CpuState& state, GuestMemory& memory,
                      DecodeCache* cache, const BlockLimits& limits)
 {
     BlockResult block;
+    StepBudget budget;
+    budget.attention = limits.attention;
     while (true)
     {
-        StepOne(block.last, state, memory, environment, features, cache);
-        if (block.last.status != StepStatus::kRetired)
+        budget.allowance = limits.max_steps - block.steps;
+        StepOne(block.last, state, memory, environment, features, cache, &budget);
+        // A string instruction reports its steps, the iterations a fault or a
+        // declined port mid-REP left behind included (design #32); any other
+        // counts one if it retired.
+        const StepStatus status = block.last.status;
+        if (budget.string_steps != 0)
         {
-            if (block.last.status == StepStatus::kRetiredAndStopped)
-            {
-                ++block.retired;
-            }
+            block.steps += budget.string_steps;
+            budget.string_steps = 0;
+        }
+        else if (status == StepStatus::kRetired || status == StepStatus::kRetiredAndStopped)
+        {
+            ++block.steps;
+        }
+        if (status != StepStatus::kRetired)
+        {
             return block;
         }
-        ++block.retired;
-        if (block.retired >= limits.max_instructions ||
+        if (block.steps >= limits.max_steps ||
             limits.attention->load(std::memory_order_relaxed))
         {
             return block;
