@@ -7,6 +7,7 @@
 #ifndef REX86_INTERP_ACCESS_H_
 #define REX86_INTERP_ACCESS_H_
 
+#include <atomic>
 #include <cstdint>
 
 #include "decode/decoder.h"
@@ -16,6 +17,19 @@
 
 namespace rex86::interp
 {
+
+// What RunBlock lends a REP string (design #32): the block's step limit,
+// the steps it has run so far, and the Cpu's attention flag. RunBlock counts
+// one step for each instruction that retires; a string instruction adds the
+// iterations beyond that, or all it completed when it does not retire (a
+// partial run, a fault, a declined port). Only string instructions touch
+// it, so other instructions pay nothing.
+struct StepBudget
+{
+    std::uint64_t limit = ~std::uint64_t{0};
+    std::uint64_t used = 0;
+    const std::atomic<bool>* attention = nullptr;
+};
 
 // One instruction's execution context. `fault` is filled by the first
 // failing access; later helpers become no-ops once `faulted` is set, so
@@ -40,6 +54,8 @@ struct Ctx
     // more than their own feature's gate (FXSAVE without SSE, design #29).
     // Null outside interp::Step.
     const Features* features = nullptr;
+    // Null outside RunBlock: a REP string then runs to completion.
+    StepBudget* budget = nullptr;
 
     void Fault(FaultKind kind, std::uint32_t address, bool on_write);
 };

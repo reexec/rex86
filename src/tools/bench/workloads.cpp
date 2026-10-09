@@ -166,8 +166,8 @@ std::uint32_t CallModel()
 }
 
 // string: fills a block with REP STOSD, copies it with REP MOVSD and reads
-// two dwords back. EAX := the checksum. A REP instruction retires once for
-// the whole block, so this kernel's MIPS is not comparable to the others'.
+// two dwords back. EAX := the checksum. Each REP iteration is one step of
+// the budget (design #32), so this kernel's figures count iterations.
 void EmitString(Assembler* a)
 {
     a->Cld();

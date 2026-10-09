@@ -28,7 +28,7 @@ void PrintEvent(const std::uint64_t budget, const void* event, const void* state
     const auto& e = *static_cast<const rex86::Event*>(event);
     const auto& s = *static_cast<const rex86::CpuState*>(state);
     std::printf("  run budget=%" PRIu64 " -> %s retired=%" PRIu64 " fault=%u address=%08X eip=%08X\n",
-                budget, kReasons[static_cast<unsigned>(e.reason) & 7u], e.instructions_retired,
+                budget, kReasons[static_cast<unsigned>(e.reason) & 7u], e.steps,
                 static_cast<unsigned>(e.fault_kind), e.fault_address, s.eip);
 }
 

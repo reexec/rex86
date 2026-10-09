@@ -95,7 +95,7 @@ void RunBlockTests(rex86::test::Context& context)
             const rex86::Event event = rig.cpu.Run(100);
             REX86_CHECK(context, event.reason == StopReason::kGate);
             REX86_CHECK_EQ(context, event.gate_address, kCode + 2);
-            REX86_CHECK_EQ(context, event.instructions_retired, std::uint64_t{2});
+            REX86_CHECK_EQ(context, event.steps, std::uint64_t{2});
             REX86_CHECK_EQ(context, rig.cpu.state().Get(Gpr::kEax), 2u);
         }
         // A filter hit that is not a gate (another address sharing the
@@ -135,7 +135,7 @@ void RunBlockTests(rex86::test::Context& context)
             const rex86::Event event = rig.cpu.Run(100);
             REX86_CHECK(context, event.reason == StopReason::kSoftwareInterrupt);
             REX86_CHECK_EQ(context, static_cast<unsigned>(event.vector), 0x20u);
-            REX86_CHECK_EQ(context, event.instructions_retired, std::uint64_t{1});
+            REX86_CHECK_EQ(context, event.steps, std::uint64_t{1});
             REX86_CHECK_EQ(context, rig.cpu.state().Get(Gpr::kEcx), 0u);
         }
         // With IF clear the interrupt waits; STI's shadow lets one more
@@ -146,7 +146,7 @@ void RunBlockTests(rex86::test::Context& context)
             rig.cpu.RaiseInterrupt(0x20);
             const rex86::Event event = rig.cpu.Run(100);
             REX86_CHECK(context, event.reason == StopReason::kSoftwareInterrupt);
-            REX86_CHECK_EQ(context, event.instructions_retired, std::uint64_t{4});
+            REX86_CHECK_EQ(context, event.steps, std::uint64_t{4});
             REX86_CHECK_EQ(context, rig.cpu.state().Get(Gpr::kEcx), 3u);
             // Cleared, the block runs on to HLT.
             rig.cpu.ClearPendingInterrupt(0x20);
@@ -160,7 +160,7 @@ void RunBlockTests(rex86::test::Context& context)
             rig.Put(kCode, {0xE6, 0x11, 0x41, 0x41, 0xF4});  // out 0x11, al; inc ecx x2; hlt
             const rex86::Event event = rig.cpu.Run(100);
             REX86_CHECK(context, event.reason == StopReason::kStopRequested);
-            REX86_CHECK_EQ(context, event.instructions_retired, std::uint64_t{1});
+            REX86_CHECK_EQ(context, event.steps, std::uint64_t{1});
             REX86_CHECK_EQ(context, rig.cpu.state().Get(Gpr::kEcx), 0u);
             REX86_CHECK(context, rig.cpu.Run(100).reason == StopReason::kHalted);
             REX86_CHECK_EQ(context, rig.cpu.state().Get(Gpr::kEcx), 2u);
@@ -171,7 +171,7 @@ void RunBlockTests(rex86::test::Context& context)
             rig.Put(kCode, {0x41, 0xEB, 0xFD});  // L: inc ecx; jmp L
             const rex86::Event event = rig.cpu.Run(7);
             REX86_CHECK(context, event.reason == StopReason::kBudgetExhausted);
-            REX86_CHECK_EQ(context, event.instructions_retired, std::uint64_t{7});
+            REX86_CHECK_EQ(context, event.steps, std::uint64_t{7});
             REX86_CHECK_EQ(context, rig.cpu.state().Get(Gpr::kEcx), 4u);
         }
         // Self-modifying code within one block: the loop rewrites its own
@@ -198,7 +198,7 @@ void RunBlockTests(rex86::test::Context& context)
             const rex86::Event event = rig.cpu.Run(100);
             REX86_CHECK(context, event.reason == StopReason::kFault);
             REX86_CHECK(context, event.fault_kind == rex86::FaultKind::kAccessViolation);
-            REX86_CHECK_EQ(context, event.instructions_retired, std::uint64_t{1});
+            REX86_CHECK_EQ(context, event.steps, std::uint64_t{1});
             REX86_CHECK_EQ(context, rig.cpu.state().eip, kCode + 1);
         }
     }

@@ -150,7 +150,7 @@ ExecStatus ExecAluBinary(Ctx* ctx, const ZydisMnemonic mnemonic)
 
 // One instruction's semantics, after a successful decode. next_eip is the
 // fallthrough; branch semantics overwrite it. On kStop, *stop_event is
-// complete apart from instructions_retired.
+// complete apart from Event::steps.
 ExecStatus Execute(Ctx* ctx, std::uint32_t* next_eip, Event* stop_event)
 {
     CpuState& s = ctx->state;
@@ -847,6 +847,7 @@ inline void ExecuteDecoded(StepResult& result, CpuState& state, GuestMemory& mem
 
     Ctx ctx{state, memory, environment, decoded, Event{}, false};
     ctx.features = &features;
+    ctx.budget = result.budget;
     const std::uint32_t fallthrough = start_offset + decoded.Length();
     std::uint32_t next_eip = fallthrough;
     Event stop_event;
@@ -896,6 +897,11 @@ inline void ExecuteDecoded(StepResult& result, CpuState& state, GuestMemory& mem
             // addresses the instruction.
             result.status = StepStatus::kStopped;
             result.event = stop_event;
+            return;
+        case ExecStatus::kPartial:
+            // A REP string between iterations (design #32): EIP still
+            // addresses the instruction.
+            result.status = StepStatus::kPartial;
             return;
         case ExecStatus::kFault:
             // The instruction did not retire; EIP still addresses it.
@@ -1005,22 +1011,30 @@ BlockResult RunBlock(CpuState& state, GuestMemory& memory,
                      DecodeCache* cache, const BlockLimits& limits)
 {
     BlockResult block;
+    StepBudget budget;
+    budget.limit = limits.max_steps;
+    budget.attention = limits.attention;
+    block.last.budget = &budget;
     while (true)
     {
         StepOne(block.last, state, memory, environment, features, cache);
-        if (block.last.status != StepStatus::kRetired)
+        // An instruction that retires counts one step here; a string
+        // instruction has added its other iterations, and those a fault, a
+        // declined port or a partial run left behind (design #32).
+        const StepStatus status = block.last.status;
+        if (status != StepStatus::kRetired)
         {
-            if (block.last.status == StepStatus::kRetiredAndStopped)
+            if (status == StepStatus::kRetiredAndStopped)
             {
-                ++block.retired;
+                ++budget.used;
             }
-            return block;
+            break;
         }
-        ++block.retired;
-        if (block.retired >= limits.max_instructions ||
+        ++budget.used;
+        if (budget.used >= budget.limit ||
             limits.attention->load(std::memory_order_relaxed))
         {
-            return block;
+            break;
         }
         if (limits.gates != nullptr)
         {
@@ -1029,10 +1043,13 @@ BlockResult RunBlock(CpuState& state, GuestMemory& memory,
                 cs.base + (state.eip & (cs.default_32bit ? 0xFFFFFFFFu : 0xFFFFu));
             if (limits.gates->MayContain(linear))
             {
-                return block;
+                break;
             }
         }
     }
+    block.last.budget = nullptr;
+    block.steps = budget.used;
+    return block;
 }
 
 bool EnterInterrupt(CpuState& state, GuestMemory& memory,

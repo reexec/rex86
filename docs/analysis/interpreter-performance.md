@@ -100,6 +100,30 @@
 
 *Confirmed: medians of three **interleaved** runs each of #34's HEAD (before) and #35 (after) on the same machine, defaults, 20 frames, with the decode buffer gone from the cache-hit path, the block loop, the gate filter, results written in place and the `SlotOf` table. Mixed's board conversion (A, IPC 1.0 inferred): **0.031** for the 400 MHz boards (533 ms a board frame), **0.0089** for the 1.4 GHz board (1,867 ms). Correcting #34: section 2.1's "`interp::Step` itself 39% (state saving and dispatch)" was mostly GCC zeroing a 1,144-byte `std::optional<DecodedInstruction>` local on every instruction, cache hits included (31.9% in the sampling profile, `rep stos` in the disassembly), which gprof's per-function figure could not separate; state saving itself is small (cutting the segment copy made no measurable difference). B's before figures are lower than section 2.1's for the same code (mixed 10.23): the same binary measured today, the cause looking like host state but unresolved, which is why before and after were interleaved and only the ratios compare. The block loop by itself (checks per block) made no measurable difference on A and 5-10% on B, inferred to mean GCC already made the per-instruction loop checks cheap. Remaining bottlenecks (sampling profiles): on A's alu, memory and call, `ExecuteDecoded` itself, `Execute`'s dispatch, the cache lookup at about 11% (`Lookup`, page attributes, generations), and `ReadOperand`/`WriteOperand`/`ReadGpr` (Zydis operand resolution); on B's mixed, `WriteVirtual` 14.5%, `ExecuteStrings` 13.1%, `Write32` 6.7% and `PageAttributeTable::Get` 5.3% (range, page and `kTranslated` checks per store, and REP strings). Basic-block lookups were not done, their gain being part of the lookup's cost. Next candidates are the store path and batched string instructions (overlapping #32) or phase 3's translation backends.*
 
+## 2.3 REP 반복을 단계로 센 뒤 (2026-10-10, #32) / After counting REP iterations as steps
+
+근거: [#32 설계](../design/20261010-i032-rep-string-budget.md), [로그](../work-logs/20261010-i032-rep-string-budget.md)
+
+**단위 변경(확인됨)**: #32부터 예산, `retired=`, `lap_instructions=`, `mips=`는 단계를 센다. REP 문자열은 반복 하나가 한 단계다. `string` 워크로드의 바퀴 단계 수는 53,258에서 569,354가 됐다. `mixed`는 `string`을 포함하므로 둘 다 이전 기록과 MIPS로 비교하지 않고, 바퀴당 비용으로 비교한다.
+
+호스트 C: 클라우드 VM, Intel Xeon 2.80 GHz 4코어(모델명 `Intel(R) Xeon(R) Processor`), Ubuntu 24.04, GCC 13, `linux-x64-release`. 수정 전(`05f4f86`)과 #32를 번갈아 다섯 번씩 돌린 중앙값, 기본 설정(20프레임).
+
+| 워크로드 | 수정 전 MIPS | #32 MIPS | 호스트 명령/단계 전 | 후 |
+|---|---|---|---|---|
+| alu | 17.31 | 16.81 | 503.6 | 505.8 |
+| memory | 19.53 | 19.52 | 490.5 | 492.8 |
+| call | 19.31 | 19.41 | 490.8 | 493.1 |
+| x87 | 7.54 | 7.55 | 1046.3 | 1048.7 |
+| string (단위 다름) | 3.63 | 41.34 | 바퀴당 152.3M | 바퀴당 163.7M |
+| mixed (단위 다름) | 8.76 | 33.46 | | |
+
+* **확인됨**: 호스트 C의 벽시계 수치는 같은 바이너리의 다섯 번 사이에서도 최소와 최대가 10% 넘게 벌어진다. 그래서 회귀 판단은 cachegrind의 호스트 명령 수(`Ir`)로 했다. 두 프레임과 여섯 프레임 실행의 차를 단계 수로 나눈 한계값이라 시작 비용이 빠진다.
+* **확인됨**: REP가 아닌 워크로드의 비용은 단계당 호스트 명령 약 2개(0.4~0.5%) 늘었다. `ExecuteDecoded`가 `StepResult`의 예산 포인터를 `Ctx`로 옮기는 몫이다. 벽시계 중앙값의 차(alu −2.9%, 나머지 ±0.5%)는 잡음 범위 안이다.
+* **확인됨**: `string`은 바퀴당 호스트 명령이 7.5% 늘었다. 반복마다 한도와 `attention`을 보는 몫이다. 같은 측정의 벽시계는 바퀴당 6.6% 빨랐으므로(초당 68.1 → 72.6바퀴) 이 차도 잡음 범위로 본다.
+* **확인됨**: 같은 #32의 첫 두 구현은 단계당 호스트 명령이 16개 늘었다(alu 503.6 → 519.8). 명령마다 허용을 쓰고 문자열의 단계 보고를 읽는 몫, 그리고 일곱째 인자가 스택으로 넘어가며 레지스터를 밀어낸 몫이었다.
+
+*Unit change (confirmed): from #32 on the budget, `retired=`, `lap_instructions=` and `mips=` count steps, one per REP string iteration; the `string` workload's lap went from 53,258 to 569,354 steps, and as `mixed` includes `string`, both compare with earlier records by cost per lap, not by MIPS. Host C: a cloud VM, Intel Xeon 2.80 GHz with 4 cores (model name `Intel(R) Xeon(R) Processor`), Ubuntu 24.04, GCC 13, `linux-x64-release`; medians of five interleaved runs each of the version before (`05f4f86`) and #32, defaults (20 frames), in the table above. Confirmed: host C's wall-clock figures spread by more than 10% between minimum and maximum across five runs of one binary, so the regression was judged by cachegrind's host instruction count (`Ir`), taken as the marginal value between runs of two and six frames divided by the steps, which leaves out the start-up cost. Confirmed: workloads without REP cost about 2 more host instructions per step (0.4-0.5%), `ExecuteDecoded` copying the budget pointer from the `StepResult` into `Ctx`; the wall-clock medians' differences (alu −2.9%, the rest within ±0.5%) are within the noise. Confirmed: `string` costs 7.5% more host instructions per lap, the per-iteration check of the limit and `attention`; its wall clock in the same measurement was 6.6% faster per lap (68.1 to 72.6 laps a second), so that difference too is taken as noise. Confirmed: #32's first two implementations cost 16 more host instructions per step (alu 503.6 to 519.8): writing the allowance per instruction and reading the string's step report, and a seventh argument going on the stack and pushing registers out.*
+
 ## 3. 읽는 법 / Reading
 
 * **확인됨(#27 시점)**: 인터프리터는 명령 종류와 거의 무관하게 2~4.5 MIPS였다. `alu`(레지스터만)와 `memory`(적재와 저장)가 비슷하고, `call`도 비슷하다. 명령 하나의 비용이 의미 계산이 아니라 **디스패치(인출, 디코드, 피연산자 해석)에 지배된다**는 뜻이다. #21 설계의 프로파일(인출과 페이지 검사 40%, 디코드 27%)과 맞는다. 다음 단계(블록 캐시, 디코드 캐시, 번역 백엔드)의 근거였고, #34의 디코드 캐시가 이것을 확인했다(2.1절).

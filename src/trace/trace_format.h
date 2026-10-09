@@ -33,7 +33,7 @@ enum class CaseKind : std::uint8_t
 
 enum class RunMode : std::uint8_t
 {
-    kSingleStep = 0,  // Cpu::Step once
+    kSingleStep = 0,  // one instruction: Cpu::Step until none is in progress
     kUntilHalt = 1,   // Cpu::Run(budget)
 };
 

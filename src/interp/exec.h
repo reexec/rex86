@@ -19,6 +19,7 @@ enum class ExecStatus : std::uint8_t
     kContinue,
     kStop,           // retired, event filled (HLT, INT n, port I/O)
     kStopNoRetire,   // not retired, event filled (a declined INS/OUTS)
+    kPartial,        // a REP string stopped between iterations (design #32)
     kFault,          // not retired, ctx.fault filled
     kUnimplemented,  // decoded but not in this increment
 };

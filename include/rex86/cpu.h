@@ -109,14 +109,20 @@ public:
     bool NextPendingInterrupt(std::uint8_t* vector) const;
     void ClearPendingInterrupt(std::uint8_t vector);
 
-    // Runs until a stop reason or until instruction_budget instructions have
-    // retired. Without an engine it returns kNoEngine at once, retiring no
-    // instruction.
-    Event Run(std::uint64_t instruction_budget);
-    // One instruction, for the comparison harness.
+    // Runs until a stop reason or until step_budget steps have run (see
+    // Event::steps; a REP string counts each iteration and may stop between
+    // them, design #32). Without an engine it returns kNoEngine at once,
+    // running no step.
+    Event Run(std::uint64_t step_budget);
+    // One step: one instruction, or one iteration of a REP string, as a
+    // trap-flag single step on the hardware.
     Event Step();
+    // True while CS:EIP addresses a REP string stopped between iterations:
+    // the next Run continues it, without a gate check at its address. A
+    // host running one whole instruction repeats Step while this holds.
+    [[nodiscard]] bool InstructionInProgress() const;
     // Asks a Run on another host thread to return kStopRequested at its next
-    // instruction boundary.
+    // instruction boundary or REP string iteration boundary.
     void RequestStop();
 
     // Tells the engines that [address, address + size) changed under them,
@@ -151,7 +157,8 @@ private:
         std::atomic<bool> value_{false};
     };
 
-    Event RunUntilStop(std::uint64_t instruction_budget);
+    Event RunUntilStop(std::uint64_t step_budget);
+    [[nodiscard]] std::uint32_t LinearEip() const;
     // Recomputes attention_ from the pending interrupts and stop request.
     void RefreshAttention();
 
@@ -172,7 +179,11 @@ private:
     // The interpreter's decode cache, made once the Cpu has retired
     // kDecodeCacheWarmup instructions so short-lived Cpus never pay for it.
     std::unique_ptr<interp::DecodeCache> decode_cache_;
-    std::uint64_t retired_total_ = 0;
+    std::uint64_t steps_total_ = 0;
+    // A REP string stopped between iterations at this linear address
+    // (design #32); its gate was checked when it started.
+    bool in_progress_ = false;
+    std::uint32_t in_progress_linear_ = 0;
     // Set for one boundary after MOV SS, POP SS or an IF-enabling STI.
     bool interrupt_shadow_ = false;
 };

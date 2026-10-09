@@ -144,8 +144,8 @@ bool Machine::RunFrame(const std::uint64_t budget, std::uint64_t* laps,
     while (remaining > 0)
     {
         const Event event = cpu_->Run(remaining);
-        remaining -= event.instructions_retired;
-        lap_so_far_ += event.instructions_retired;
+        remaining -= event.steps;
+        lap_so_far_ += event.steps;
         if (event.reason == StopReason::kBudgetExhausted)
         {
             break;

@@ -152,9 +152,21 @@ ReplayResult Replay(const Case& value)
     state.eip = value.input.eip;
     state.eflags = value.input.eflags;
 
-    const Event event = value.mode == RunMode::kSingleStep
-                            ? cpu.Step()
-                            : cpu.Run(value.budget);
+    // A single-step case is one whole instruction: the host fuzz lets every
+    // REP iteration trap run on to the next (kb trap-flag-single-step), and
+    // the core's Step runs one iteration (design #32).
+    Event event;
+    if (value.mode == RunMode::kSingleStep)
+    {
+        do
+        {
+            event = cpu.Step();
+        } while (event.reason == StopReason::kBudgetExhausted && cpu.InstructionInProgress());
+    }
+    else
+    {
+        event = cpu.Run(value.budget);
+    }
 
     if (static_cast<std::uint8_t>(event.reason) != value.reason)
     {

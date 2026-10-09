@@ -1,5 +1,6 @@
 #include "rex86/guest_memory.h"
 
+#include <cstdint>
 #include <cstring>
 
 namespace rex86
@@ -248,7 +249,9 @@ std::uint8_t* GuestMemory::HostPointer(std::uint32_t address, std::uint32_t size
     {
         return nullptr;
     }
-    return base_ + address;
+    // Integer arithmetic: with a null base (the identity mapping) pointer
+    // arithmetic on null would be undefined (Clang's UBSan reports it).
+    return reinterpret_cast<std::uint8_t*>(reinterpret_cast<std::uintptr_t>(base_) + address);
 }
 
 }  // namespace rex86

@@ -25,7 +25,7 @@ Cpu& Cpu::operator=(Cpu&&) noexcept = default;
 namespace
 {
 
-// Instructions retired before a Cpu makes its decode cache (design #34).
+// Steps run before a Cpu makes its decode cache (design #34).
 // A build may set it to 0 so that every test and fuzz runs through the
 // cache (CI's sanitizer job does).
 #if defined(REX86_DECODE_CACHE_WARMUP)
@@ -129,21 +129,34 @@ void Cpu::RefreshAttention()
     }
 }
 
-Event Cpu::Run(std::uint64_t instruction_budget)
+Event Cpu::Run(std::uint64_t step_budget)
 {
-    const Event event = RunUntilStop(instruction_budget);
-    retired_total_ += event.instructions_retired;
+    const Event event = RunUntilStop(step_budget);
+    steps_total_ += event.steps;
     return event;
 }
 
-Event Cpu::RunUntilStop(std::uint64_t instruction_budget)
+std::uint32_t Cpu::LinearEip() const
+{
+    const SegmentRegister& cs = state_.Seg(Segment::kCs);
+    return cs.base + (state_.eip & (cs.default_32bit ? 0xFFFFFFFFu : 0xFFFFu));
+}
+
+bool Cpu::InstructionInProgress() const
+{
+    return in_progress_ && LinearEip() == in_progress_linear_;
+}
+
+Event Cpu::RunUntilStop(std::uint64_t step_budget)
 {
     // The loop owns what is not an instruction's semantics: stop requests,
     // gates (checked before the instruction at the gate runs), external
     // interrupt delivery at boundaries with IF set, and the budget. The
-    // x86 semantics live in interp::Step alone.
+    // x86 semantics live in interp::Step alone. A boundary is an
+    // instruction boundary or one between a REP string's iterations
+    // (design #32).
     Event event;
-    std::uint64_t retired = 0;
+    std::uint64_t steps = 0;
 
     while (true)
     {
@@ -152,19 +165,19 @@ Event Cpu::RunUntilStop(std::uint64_t instruction_budget)
             stop_requested_.value().store(false);
             RefreshAttention();
             event.reason = StopReason::kStopRequested;
-            event.instructions_retired = retired;
+            event.steps = steps;
             return event;
         }
 
-        const SegmentRegister& cs = state_.Seg(Segment::kCs);
-        const std::uint32_t ip_mask =
-            cs.default_32bit ? 0xFFFFFFFFu : 0xFFFFu;
-        const std::uint32_t linear = cs.base + (state_.eip & ip_mask);
-        if (!gates_.empty() && IsGate(linear))
+        // A REP string resumed between iterations already passed its gate
+        // check when it started.
+        const std::uint32_t linear = LinearEip();
+        if (!gates_.empty() && IsGate(linear) &&
+            !(in_progress_ && linear == in_progress_linear_))
         {
             event.reason = StopReason::kGate;
             event.gate_address = linear;
-            event.instructions_retired = retired;
+            event.steps = steps;
             return event;
         }
 
@@ -181,43 +194,44 @@ Event Cpu::RunUntilStop(std::uint64_t instruction_budget)
                 // The host keeps the vector pending and takes the event.
                 event.reason = StopReason::kSoftwareInterrupt;
                 event.vector = vector;
-                event.instructions_retired = retired;
+                event.steps = steps;
                 return event;
             }
             Event fault_event;
             if (!interp::EnterInterrupt(state_, *memory_, *environment_,
                                         target_cs, target_eip, &fault_event))
             {
-                fault_event.instructions_retired = retired;
+                fault_event.steps = steps;
                 return fault_event;
             }
             ClearPendingInterrupt(vector);
             continue;
         }
 
-        if (retired >= instruction_budget)
+        if (steps >= step_budget)
         {
             event.reason = StopReason::kBudgetExhausted;
-            event.instructions_retired = retired;
+            event.steps = steps;
             return event;
         }
 
         // A block runs until something needs this loop again: the budget,
         // the end of the warm-up, attention (a stop request or a pending
         // interrupt), a possible gate, or an instruction that did not simply
-        // retire (design #35).
+        // retire (design #35). The first two and attention may stop a REP
+        // string between its iterations (design #32).
         interp::BlockLimits limits;
-        limits.max_instructions = instruction_budget - retired;
+        limits.max_steps = step_budget - steps;
         if (!decode_cache_)
         {
-            const std::uint64_t run = retired_total_ + retired;
+            const std::uint64_t run = steps_total_ + steps;
             if (run >= kDecodeCacheWarmup)
             {
                 decode_cache_ = std::make_unique<interp::DecodeCache>();
             }
             else
             {
-                limits.max_instructions = std::min(limits.max_instructions, kDecodeCacheWarmup - run);
+                limits.max_steps = std::min(limits.max_steps, kDecodeCacheWarmup - run);
             }
         }
         limits.attention = &attention_.value();
@@ -225,12 +239,20 @@ Event Cpu::RunUntilStop(std::uint64_t instruction_budget)
         limits.gates = gate_filter_.empty() ? nullptr : &filter;
         const interp::BlockResult block =
             interp::RunBlock(state_, *memory_, *environment_, features_, decode_cache_.get(), limits);
-        retired += block.retired;
+        steps += block.steps;
         interrupt_shadow_ = block.last.inhibit_interrupts;
+        // A REP string stopped between iterations continues at the next pass
+        // of this loop, or in the next Run once the budget is spent.
+        in_progress_ = block.last.status == interp::StepStatus::kPartial;
+        if (in_progress_)
+        {
+            in_progress_linear_ = LinearEip();
+            continue;
+        }
         if (block.last.status != interp::StepStatus::kRetired)
         {
             event = block.last.event;
-            event.instructions_retired = retired;
+            event.steps = steps;
             return event;
         }
     }

@@ -86,7 +86,7 @@ void RunCpuTests(rex86::test::Context& context)
     REX86_CHECK(context, event.reason == StopReason::kFault);
     REX86_CHECK(context, event.fault_kind == rex86::FaultKind::kAccessViolation);
     REX86_CHECK(context, event.fault_on_fetch);
-    REX86_CHECK_EQ(context, event.instructions_retired, std::uint64_t{0});
+    REX86_CHECK_EQ(context, event.steps, std::uint64_t{0});
     REX86_CHECK(context, cpu.Step().reason == StopReason::kFault);
 
     // RequestStop is honoured by the next Run and then forgotten.

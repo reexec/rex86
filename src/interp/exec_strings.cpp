@@ -1,9 +1,11 @@
 // Interpreter increments 2-3 (#13, #15): the string instructions, string
-// port I/O, and their REP prefixes. Iterations complete inside one Step (budgeted as one
-// instruction, keeping #11's loop contract), and a fault mid-string
-// leaves the architectural partial state -- updated index and count
+// port I/O, and their REP prefixes. Each iteration is one step of the
+// budget (design #32), as each is one trap-flag single step on the
+// hardware. A REP stops between iterations when its step allowance is used
+// up or attention is raised, and a fault mid-string stops it too; both
+// leave the architectural partial state -- updated index and count
 // registers with EIP still at the instruction -- which is exactly the
-// resumable state the hardware leaves.
+// resumable state the hardware leaves at an interrupt or exception.
 
 #include "interp/exec.h"
 #include "interp/flags.h"
@@ -107,6 +109,21 @@ ExecStatus ExecuteStrings(Ctx* ctx, Event* stop_event)
                        (ZYDIS_ATTRIB_HAS_REP | ZYDIS_ATTRIB_HAS_REPE)) != 0;
 
     ctx->keep_partial_state = has_rep;
+    // Completed iterations, counted as they finish and added to the block's
+    // steps on every way out, so that a fault or a declined port says how
+    // many steps became architectural (design #32).
+    struct StepReport
+    {
+        StepBudget* budget;
+        std::uint64_t steps = 0;
+        ~StepReport()
+        {
+            if (budget != nullptr)
+            {
+                budget->used += steps;
+            }
+        }
+    } report{ctx->budget};
     while (true)
     {
         if (has_rep && ReadIndex(s, Gpr::kEcx, address_mask) == 0)
@@ -247,17 +264,34 @@ ExecStatus ExecuteStrings(Ctx* ctx, Event* stop_event)
             AdvanceIndex(s, Gpr::kEdi, address_mask, bytes);
         }
 
+        ++report.steps;
         if (!has_rep)
         {
             break;
         }
-        WriteIndex(s, Gpr::kEcx, address_mask,
-                   ReadIndex(s, Gpr::kEcx, address_mask) - 1u);
-        if ((is_scas || is_cmps) &&
-            GetFlag(s, kEflagsZero) != repe)
+        const std::uint32_t remaining = ReadIndex(s, Gpr::kEcx, address_mask) - 1u;
+        WriteIndex(s, Gpr::kEcx, address_mask, remaining);
+        if (remaining == 0 ||
+            ((is_scas || is_cmps) && GetFlag(s, kEflagsZero) != repe))
         {
             break;
         }
+        // The instruction is not finished: stop at this iteration boundary
+        // when the budget or the Cpu's loop needs it (design #32).
+        const StepBudget* budget = ctx->budget;
+        if (budget != nullptr &&
+            (budget->used + report.steps >= budget->limit ||
+             (budget->attention != nullptr &&
+              budget->attention->load(std::memory_order_relaxed))))
+        {
+            return ExecStatus::kPartial;
+        }
+    }
+    // The instruction retires: RunBlock counts its last step, or the one
+    // step of a REP that ran no iteration.
+    if (report.steps != 0)
+    {
+        --report.steps;
     }
     return ExecStatus::kContinue;
 }
