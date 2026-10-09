@@ -36,6 +36,10 @@ struct Ctx
     // fault restores the integer state the instruction started from
     // (design #17, decision 6).
     bool keep_partial_state = false;
+    // The enabled features, for instructions whose behavior depends on
+    // more than their own feature's gate (FXSAVE without SSE, design #29).
+    // Null outside interp::Step.
+    const Features* features = nullptr;
 
     void Fault(FaultKind kind, std::uint32_t address, bool on_write);
 };

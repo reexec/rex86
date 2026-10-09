@@ -15,6 +15,7 @@ void CpuState::Reset()
     Seg(Segment::kCs).executable = true;
     Seg(Segment::kCs).writable = false;
     x87 = X87State{};
+    sse = SseState{};
 }
 
 }  // namespace rex86

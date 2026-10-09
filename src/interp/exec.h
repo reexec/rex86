@@ -56,6 +56,21 @@ ExecStatus ExecuteBcd(Ctx* ctx);
 // CMPXCHG8B, CMOVcc and UD0/UD1/UD2.
 ExecStatus ExecutePost386(Ctx* ctx);
 
+// FXSAVE/FXRSTOR and LDMXCSR/STMXCSR (#29).
+ExecStatus ExecuteFxsave(Ctx* ctx);
+
+// The SSE instructions other than floating-point arithmetic (#29):
+// moves, logic, shuffles, unpacks, MOVMSKPS, MOVNTPS, PREFETCHh, SFENCE.
+ExecStatus ExecuteSse(Ctx* ctx);
+
+// The SSE floating-point instructions (#29, increment 2): arithmetic,
+// MIN/MAX, SQRT, RCP/RSQRT, compares, COMISS/UCOMISS and conversions.
+ExecStatus ExecuteSseFloat(Ctx* ctx);
+
+// The MMX instructions and the MMX integer instructions SSE added, EMMS
+// included (#29).
+ExecStatus ExecuteMmx(Ctx* ctx);
+
 // The tail of the dispatch: every group file in order, then
 // kUnimplemented.
 ExecStatus ExecuteExtended(Ctx* ctx, std::uint32_t* next_eip,

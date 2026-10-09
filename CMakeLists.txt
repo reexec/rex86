@@ -95,6 +95,7 @@ add_library(rex86_core STATIC
     src/decode/decoder.cpp
     src/fpu/float80.cpp
     src/fpu/softfloat_bridge.cpp
+    src/fpu/sse_math.cpp
     src/fpu/transcendental_kernels.cpp
     src/fpu/wide_float.cpp
     src/fpu/x87_math.cpp
@@ -108,6 +109,11 @@ add_library(rex86_core STATIC
     src/interp/exec_x87.cpp
     src/interp/exec_x87_env.cpp
     src/interp/exec_x87_transcendental.cpp
+    src/interp/exec_mmx.cpp
+    src/interp/exec_sse.cpp
+    src/interp/exec_sse_float.cpp
+    src/interp/exec_fxsave.cpp
+    src/interp/simd_access.cpp
     src/interp/x87_access.cpp
     src/interp/x87_stack.cpp
     src/interp/interpreter.cpp
@@ -165,6 +171,9 @@ if(REX86_BUILD_TESTS)
         tests/unit/post386_test.cpp
         tests/unit/trace_test.cpp
         tests/unit/bench_test.cpp
+        tests/unit/mmx_test.cpp
+        tests/unit/sse_test.cpp
+        tests/unit/sse_float_test.cpp
         src/tools/census/census.cpp
         src/tools/sst/moo_reader.cpp
     )
@@ -243,6 +252,14 @@ if(REX86_BUILD_TESTS)
         target_link_libraries(rex86_x87_fuzz
             PRIVATE rex86::core rex86_trace_format rex86_warnings rex86_zydis)
         add_test(NAME rex86_x87_fuzz COMMAND rex86_x87_fuzz 20000 1)
+
+        # The SIMD comparison (design #29, decision 7) runs the same
+        # encodings on i386 and x86-64 hosts.
+        add_executable(rex86_simd_fuzz tests/host/linux/simd_fuzz.cpp)
+        target_include_directories(rex86_simd_fuzz PRIVATE src)
+        target_link_libraries(rex86_simd_fuzz
+            PRIVATE rex86::core rex86_trace_format rex86_warnings rex86_zydis)
+        add_test(NAME rex86_simd_fuzz COMMAND rex86_simd_fuzz 20000 1)
 
         # The integer comparison (design #22, decisions 1 to 4) executes
         # 32-bit encodings natively, so it needs an i386 process.

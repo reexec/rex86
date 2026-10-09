@@ -280,8 +280,8 @@ void RunInterpTests(rex86::test::Context& context)
     {
         // An instruction outside the implemented increments reports
         // kIllegalInstruction rather than quietly doing nothing: here
-        // EMMS (MMX, phase 1b).
-        Machine m({0x0F, 0x77,  // emms
+        // FEMMS (AMD 3DNow!, outside the core's CPU).
+        Machine m({0x0F, 0x0E,  // femms
                    0xF4});
         const rex86::Event event = m.cpu.Run(100);
         REX86_CHECK(context, event.reason == StopReason::kFault);

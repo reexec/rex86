@@ -91,6 +91,18 @@ struct X87State
     std::uint16_t last_operand_selector = 0;
 };
 
+// The SSE state (design #29, decision 1). The MMX registers are not here:
+// MMn is the low 64 bits of x87 physical register n, as the SDM defines
+// (Vol. 1 9.5), so they live in X87State::registers. Each XMM register is
+// its 16 bytes in memory order (little-endian lanes).
+struct SseState
+{
+    static constexpr std::uint32_t kMxcsrReset = 0x1F80u;
+
+    std::array<std::array<std::uint8_t, 16>, 8> xmm = {};
+    std::uint32_t mxcsr = kMxcsrReset;
+};
+
 struct CpuState
 {
     std::array<std::uint32_t, 8> gpr = {};
@@ -98,6 +110,7 @@ struct CpuState
     std::uint32_t eflags = kEflagsReserved1;
     std::array<SegmentRegister, 6> segments = {};
     X87State x87;
+    SseState sse;
 
     [[nodiscard]] std::uint32_t Get(Gpr reg) const
     {
@@ -120,7 +133,8 @@ struct CpuState
     }
 
     // Returns the state to its reset values. Code segments are made
-    // executable; every other segment starts flat and writable.
+    // executable; every other segment starts flat and writable. MXCSR starts
+    // at 0x1F80 (every exception masked, round to nearest).
     void Reset();
 };
 
