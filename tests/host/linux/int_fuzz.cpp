@@ -1046,6 +1046,62 @@ bool SourceFirstCompareFault(const Input& input, const HostOutcome& host,
     return false;
 }
 
+// The same source-first order when the source cannot even be addressed
+// (#40): a CMPS whose source segment is the null selector (FS in an i386
+// Linux process) and whose destination is unreachable raises #GP on Zen 5
+// but #PF at the destination on the core and the other hosts. The segments
+// here are flat with a 4 GiB limit, so a null selector is the only way the
+// source raises #GP. It counts only when the case matches once the host's
+// fault reads as a #PF at a byte of the destination operand.
+bool SourceSegmentFirstCompareFault(const Input& input, const HostOutcome& host,
+                                    const trace::Case& c)
+{
+    const ZydisMnemonic m = input.decoded.instruction.mnemonic;
+    unsigned width = 0;
+    if (m == ZYDIS_MNEMONIC_CMPSB) width = 1;
+    if (m == ZYDIS_MNEMONIC_CMPSW) width = 2;
+    if (m == ZYDIS_MNEMONIC_CMPSD) width = 4;
+    if (width == 0 ||
+        c.fault_kind != static_cast<std::uint8_t>(rex86::FaultKind::kGeneralProtection))
+    {
+        return false;
+    }
+    ZydisRegister source_segment = ZYDIS_REGISTER_NONE;
+    for (ZyanU8 i = 0; i < input.decoded.instruction.operand_count; ++i)
+    {
+        const ZydisDecodedOperand& operand = input.decoded.operands[i];
+        if (IsMemory(operand) &&
+            (operand.mem.base == ZYDIS_REGISTER_SI || operand.mem.base == ZYDIS_REGISTER_ESI))
+        {
+            source_segment = operand.mem.segment;
+        }
+    }
+    if (source_segment < ZYDIS_REGISTER_ES || source_segment > ZYDIS_REGISTER_GS)
+    {
+        return false;
+    }
+    // The trace keeps the selectors in Zydis's segment order, ES first.
+    const unsigned index = static_cast<unsigned>(source_segment - ZYDIS_REGISTER_ES);
+    const std::uint32_t mask = input.decoded.instruction.address_width == 16 ? 0xFFFFu : 0xFFFFFFFFu;
+    const std::uint32_t destination = host.gpr[7] & mask;
+    if (c.selectors[index] != 0 || destination - kBase < kRegionSize)
+    {
+        return false;
+    }
+    trace::Case patched = c;
+    patched.fault_kind = static_cast<std::uint8_t>(rex86::FaultKind::kAccessViolation);
+    patched.flags |= trace::kCompareFaultAddress;
+    for (unsigned i = 0; i < width; ++i)
+    {
+        patched.fault_address = destination + i;
+        if (trace::Replay(patched).matched)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 // The second known vendor deviation (#22, follow-up of 2026-10-09): the
 // Intel Cascade Lake reads BOUND's lower bound, compares, and reads the
 // upper bound only when the index is not below it, so an index below the
@@ -1089,7 +1145,8 @@ bool BothBoundsReadFirst(const Input& input, const HostOutcome& host, const trac
 // The vendor deviations the fuzz counts apart from mismatches.
 bool VendorDeviation(const Input& input, const HostOutcome& host, const trace::Case& c)
 {
-    return SourceFirstCompareFault(input, host, c) || BothBoundsReadFirst(input, host, c);
+    return SourceFirstCompareFault(input, host, c) ||
+           SourceSegmentFirstCompareFault(input, host, c) || BothBoundsReadFirst(input, host, c);
 }
 
 std::string Hex(const std::vector<std::uint8_t>& bytes)
