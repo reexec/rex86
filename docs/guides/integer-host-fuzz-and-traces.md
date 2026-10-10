@@ -2,6 +2,10 @@
 
 근거: [#22 설계](../design/20261008-i022-integer-host-fuzz-and-trace.md) | 로그: [20261008-i022](../work-logs/20261008-i022-integer-host-fuzz-and-trace.md) | 실측 기록: [정수 호스트 대조](../analysis/integer-host-comparison.md) | 기법: [트랩 플래그 단일 스텝](../kb/trap-flag-single-step.md)
 
+릴리스 규모의 실행은 tag push 때 GitHub Actions가 맡습니다([캠페인 가이드](fuzz-campaign.md)).
+
+*Release-scale runs happen on GitHub Actions at each tag push ([campaign guide](fuzz-campaign.md)).*
+
 `rex86_int_fuzz`는 무작위 32비트 정수 명령 하나를 호스트 CPU와 코어에서 같은 주소, 같은 입력으로 실행해 비교합니다. **i386 Linux 프로세스에서만** 빌드되고 돕니다. `rex86_trace`는 기록된 trace를 코어로 재생하며 모든 호스트에서 빌드됩니다. CTest는 짧은 정수 fuzz(`50000 1`, i386만)와 `tests/traces/*.rxt` 재생(`rex86_trace_corpus`, 모든 호스트)을 등록합니다.
 
 *`rex86_int_fuzz` runs one random 32-bit integer instruction on the host CPU and on the core at the same addresses from the same input and compares them; it builds and runs **in i386 Linux processes only**. `rex86_trace` replays recorded traces on the core and builds on every host. CTest registers a short integer fuzz (`50000 1`, i386 only) and the replay of `tests/traces/*.rxt` (`rex86_trace_corpus`, every host).*

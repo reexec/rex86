@@ -291,6 +291,7 @@ If the requirement is a simple question or confirmation request, answer it direc
   7. squash 커밋에 `VERSION`과 같은 값의 annotated tag를 `vmajor.minor.patch`로 붙인다. tag 메시지에는 핵심 변경을 한 줄로 적는다. tag는 로컬까지만 만들고 원격 push는 사용자가 한다.
   8. 남은 로컬 작업 브랜치를 삭제한다.
 * 소비자 저장소의 FetchContent가 가리키는 것이 이 tag이므로, 사용자가 tag를 push한 뒤에 소비자의 tag 올림 작업을 시작한다.
+* tag push는 fuzz 캠페인(`.github/workflows/fuzz-campaign.yml`, [가이드](docs/guides/fuzz-campaign.md))을 전체 규모로 돌린다. tag push 뒤에 그 결과를 확인하고, 소비자의 tag 올림은 캠페인이 녹색인 tag로만 한다. 캠페인이 실패하면 tag를 지우거나 옮기지 않고 이슈를 만들어 patch 릴리스로 고친다. 다음 릴리스 노트의 검증 절에 앞 릴리스의 캠페인 결과(실행 링크, 결과, CPU 모델, 규모)를 적는다.
 * 릴리스 노트에는 해결된 이슈 `#N`(제목)과 PR 번호를 적는다. squash 커밋 ID는 머지 뒤에야 생기므로 노트 파일에 미리 적지 않고, 다음 릴리스 노트나 GitHub Release 본문에서 보완한다.
 
 ## Branch and Merge Rules
@@ -310,6 +311,7 @@ If the requirement is a simple question or confirmation request, answer it direc
   7. Tag the squash commit with an annotated tag matching `VERSION`, `vmajor.minor.patch`, whose message states the key change in one line. Create the tag locally only; the user pushes it.
   8. Delete any remaining local task branch.
 * The consumers' FetchContent points at this tag, so the consumers' tag-bump tasks start after the user has pushed the tag.
+* A tag push runs the fuzz campaign (`.github/workflows/fuzz-campaign.yml`, [guide](docs/guides/fuzz-campaign.md)) at full scale. Check its result after the tag push; consumers' tag bumps only take tags whose campaign is green. A failing campaign never deletes or moves the tag: open an issue and fix it in a patch release. The next release notes' validation section records the previous release's campaign (run link, result, CPU model, scale).
 * Release notes record the resolved issues `#N` (with titles) and the PR number. A squash commit's ID exists only after the merge, so it is not written into the note file in advance; the next release notes or the GitHub Release body supply it.
 
 ---

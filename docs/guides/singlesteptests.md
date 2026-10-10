@@ -2,6 +2,10 @@
 
 근거: [#7 설계](../design/20261007-i007-singlesteptests-runner.md), [#17 설계](../design/20261008-i017-sst-exception-comparison.md) | 로그: [20261007-i007](../work-logs/20261007-i007-singlesteptests-runner.md), [20261008-i017](../work-logs/20261008-i017-sst-exception-comparison.md)
 
+릴리스 규모의 실행은 tag push 때 GitHub Actions가 맡습니다([캠페인 가이드](fuzz-campaign.md)).
+
+*Release-scale runs happen on GitHub Actions at each tag push ([campaign guide](fuzz-campaign.md)).*
+
 [SingleStepTests/80386](https://github.com/SingleStepTests/80386)(MIT)은 실제 Intel 386EX에서 생성된 명령 단위 테스트입니다. `rex86_sst`가 이 스위트로 코어를 검증합니다. 기본 모드는 디코더 검증(디코드 성공과 길이 일치)이고, `--execute`는 인터프리터로 실행해 최종 상태를 비교합니다. 예외와 소프트웨어 인터럽트는 하네스가 real mode IVT 전달을 흉내 내 핸들러의 HLT까지 실행한 뒤 비교합니다. 테스트 데이터는 저장소에 넣지 않습니다.
 
 *SingleStepTests/80386 (MIT) are per-instruction tests generated on a real Intel 386EX; `rex86_sst` validates the core against them — by default the decoder (decode success and length equality), and with `--execute` the interpreter, comparing the final state; exceptions and software interrupts go through the harness's emulated real-mode IVT delivery to the handler's HLT before the comparison. The data never enters this repository.*

@@ -2,6 +2,10 @@
 
 근거: [#31 설계](../design/20261009-i031-robustness-fuzz.md) | 로그: [20261009-i031](../work-logs/20261009-i031-robustness-fuzz.md) | 기록: [견고성 fuzz 결과](../analysis/robustness-fuzz.md)
 
+릴리스 규모의 실행은 tag push 때 GitHub Actions가 맡습니다([캠페인 가이드](fuzz-campaign.md)).
+
+*Release-scale runs happen on GitHub Actions at each tag push ([campaign guide](fuzz-campaign.md)).*
+
 `rex86_robust`는 임의 메모리(보호 구역으로 둘러쌈), 임의 페이지 속성, 임의 CPU 상태와 기능, 임의로 답하는 호스트로 코어를 돌리고, 어떤 입력에서도 지켜져야 하는 불변식 I1~I6을 확인합니다(설계 결정 1). 의미가 맞는지는 묻지 않습니다. 그것은 호스트 대조 fuzz들의 일입니다. 모든 호스트에서 빌드되며, CTest는 `--cases 300`을 등록합니다.
 
 *`rex86_robust` runs the core on arbitrary memory (between guard zones), page attributes, CPU state and features with a randomly answering host, and checks invariants I1-I6 that must hold for any input (design decision 1); whether results are right is the host-comparison fuzzes' question. It builds on every host and CTest registers `--cases 300`.*
