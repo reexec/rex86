@@ -278,6 +278,7 @@ If the requirement is a simple question or confirmation request, answer it direc
 
 * 사용자가 작업을 요청하면 먼저 현재 Git 브랜치명을 확인한다.
 * 현재 브랜치가 `main`이면 작업용 브랜치를 새로 만든 뒤 작업한다. 브랜치 이름은 `work/iNNN-slug`로 하고 `NNN`은 이슈 번호다(예: `work/i001-repository-and-public-contract`).
+* 새 브랜치는 현재 브랜치가 `main`일 때만 만든다. 현재 브랜치가 작업 브랜치이면 새 이슈의 작업이라도 그 브랜치에서 이어서 작업하고, 브랜치 이름은 바꾸지 않는다. 그 브랜치를 머지할 때 PR 본문에는 브랜치에 쌓인 이슈를 모두 `Closes #N`으로 적는다.
 * 작업 단위가 하나 끝날 때마다 관련 변경을 Git 커밋으로 남긴다. `main`에 직접 커밋하지 않는다.
 * CI(`.github/workflows/ci.yml`)는 모든 브랜치 push에서 모든 타깃을 검증한다. 같은 저장소 브랜치에서 연 PR은 push 실행의 결과를 쓰고, fork에서 온 PR만 `pull_request`로 다시 돈다. 같은 브랜치에 새 push가 오면 앞선 실행을 취소하되 `main`은 커밋마다 결과를 남긴다.
 * 프로젝트 버전은 저장소 루트의 `VERSION` 파일에서 `major.minor.patch` 형식으로 관리한다. 사용자가 머지를 요청하면 patch를 1 올리고, minor 올림 요청이면 minor를 1 올리고 patch를 0으로, major 올림 요청이면 major를 1 올리고 minor와 patch를 0으로 한다.
@@ -298,6 +299,7 @@ If the requirement is a simple question or confirmation request, answer it direc
 
 * When the user requests work, first check the current Git branch name.
 * If the current branch is `main`, create a task branch before making changes. Name it `work/iNNN-slug`, where `NNN` is the issue number (for example `work/i001-repository-and-public-contract`).
+* Create a new branch only when the current branch is `main`. On a task branch, keep working on it even for a new issue's work, without renaming it; when it is merged, the PR body names every issue stacked on it as `Closes #N`.
 * Leave a Git commit for the related changes whenever one task unit is complete. Never commit to `main` directly.
 * CI (`.github/workflows/ci.yml`) checks every target on every branch push. A PR from a branch of this repository uses the push run's results; only a PR from a fork runs again on `pull_request`. A newer push to the same branch cancels the earlier run, except on `main`, where every commit keeps its result.
 * Manage the project version in the repository-root `VERSION` file using `major.minor.patch`. On a merge request, raise the patch by 1; on a minor-bump request, raise the minor by 1 and reset the patch to 0; on a major-bump request, raise the major by 1 and reset the minor and patch to 0.
