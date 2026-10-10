@@ -81,4 +81,40 @@ void RunGuestMemoryTests(rex86::test::Context& context)
     // A null base is the identity mapping: guest address == host address.
     GuestMemory identity(nullptr, 0x1000);
     REX86_CHECK(context, identity.HostPointer(0x10, 4) == reinterpret_cast<std::uint8_t*>(0x10));
+
+    // On a 32-bit host a real buffer's address is a guest address, so the
+    // identity mapping can be exercised for real: every accessor goes through
+    // integer address arithmetic, never through arithmetic on the null base
+    // (Clang's UBSan reported that, #37).
+    if constexpr (sizeof(void*) == 4)
+    {
+        std::vector<std::uint8_t> host(3 * rex86::kGuestPageSize, 0);
+        const std::uint32_t page =
+            (static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(host.data())) +
+             rex86::kGuestPageSize - 1) &
+            ~(rex86::kGuestPageSize - 1);
+        std::uint8_t* const at = reinterpret_cast<std::uint8_t*>(static_cast<std::uintptr_t>(page));
+        GuestMemory flat(nullptr, page + rex86::kGuestPageSize);
+        REX86_CHECK(context, flat.pages().Set(page, rex86::kGuestPageSize, rex86::kPageReadWrite));
+        REX86_CHECK(context, flat.Write32(page + 4, 0x78563412u));
+        REX86_CHECK_EQ(context, at[4], std::uint8_t{0x12});
+        REX86_CHECK_EQ(context, at[7], std::uint8_t{0x78});
+        REX86_CHECK(context, flat.Write16(page + 8, 0xBEEFu));
+        REX86_CHECK(context, flat.Write8(page + 10, 0x5A));
+        std::uint32_t word = 0;
+        std::uint16_t pair = 0;
+        std::uint8_t single = 0;
+        REX86_CHECK(context, flat.Read32(page + 4, &word));
+        REX86_CHECK_EQ(context, word, std::uint32_t{0x78563412u});
+        REX86_CHECK(context, flat.Read16(page + 8, &pair));
+        REX86_CHECK_EQ(context, pair, std::uint16_t{0xBEEFu});
+        REX86_CHECK(context, flat.Read8(page + 10, &single));
+        REX86_CHECK_EQ(context, single, std::uint8_t{0x5A});
+        const std::uint8_t bytes[3] = {1, 2, 3};
+        std::uint8_t back[3] = {};
+        REX86_CHECK(context, flat.WriteBytes(page + 16, bytes, sizeof(bytes)));
+        REX86_CHECK(context, flat.ReadBytes(page + 16, back, sizeof(back)));
+        REX86_CHECK_EQ(context, back[2], std::uint8_t{3});
+        REX86_CHECK(context, flat.HostPointer(page, 4) == at);
+    }
 }
