@@ -19,7 +19,7 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Configure
         run: cmake -S . -B build/ci -A Win32 -DREX86_WARNINGS_AS_ERRORS=ON
       - name: Build
@@ -34,7 +34,7 @@ jobs:
       matrix:
         compiler: [gcc, clang]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y ninja-build
       - name: Configure
@@ -56,7 +56,7 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y ninja-build
       - name: Configure
@@ -69,12 +69,14 @@ jobs:
   # The robustness harness under libFuzzer (design #31, decision 3): Clang
   # with ASan, UBSan and coverage-guided mutation for a fixed minute. A
   # crashing input is kept as an artifact; rex86_robust_libfuzzer <file>
-  # replays it.
+  # replays it. The whole ctest runs first in this configuration, the only
+  # one with Clang's UBSan at -O2, where #32 found UB the other jobs missed
+  # (#37).
   linux-x64-libfuzzer:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y ninja-build
       - name: Configure
@@ -83,14 +85,16 @@ jobs:
           CXX: clang++
         run: cmake -S . -B build/libfuzzer -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DREX86_LIBFUZZER=ON -DREX86_SANITIZE=address,undefined -DREX86_WARNINGS_AS_ERRORS=ON
       - name: Build
-        run: cmake --build build/libfuzzer --target rex86_robust_libfuzzer
+        run: cmake --build build/libfuzzer
+      - name: Test
+        run: ctest --test-dir build/libfuzzer --output-on-failure
       - name: Fuzz
         run: |
           mkdir -p build/libfuzzer/corpus build/libfuzzer/crashes
           ./build/libfuzzer/bin/rex86_robust_libfuzzer build/libfuzzer/corpus -max_total_time=60 -timeout=10 -max_len=512 -len_control=0 -artifact_prefix=build/libfuzzer/crashes/
       - name: Keep crashing inputs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: libfuzzer-crashes
           path: build/libfuzzer/crashes/
@@ -103,7 +107,7 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build and test in an i386 container
         run: >-
           docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src i386/debian:bookworm
@@ -124,7 +128,7 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y ninja-build
       - name: Configure
@@ -142,8 +146,8 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: mymindstorm/setup-emsdk@v14
+      - uses: actions/checkout@v7
+      - uses: mymindstorm/setup-emsdk@v16
         with:
           version: 3.1.74
           actions-cache-folder: emsdk-cache

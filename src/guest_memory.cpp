@@ -133,6 +133,20 @@ GuestMemory::GuestMemory(std::uint8_t* base, std::uint32_t size)
 {
 }
 
+namespace
+{
+
+// The host address of a guest address. Integer arithmetic: with a null base
+// (the identity mapping) pointer arithmetic on null is undefined, which
+// Clang's UBSan reports. Every byte gets its own address for the same
+// reason, rather than indexing from the first.
+inline std::uint8_t* HostAt(std::uint8_t* base, std::uint32_t address)
+{
+    return reinterpret_cast<std::uint8_t*>(reinterpret_cast<std::uintptr_t>(base) + address);
+}
+
+}  // namespace
+
 bool GuestMemory::Contains(std::uint32_t address, std::uint32_t size) const
 {
     if (size == 0)
@@ -154,7 +168,7 @@ bool GuestMemory::Read8(std::uint32_t address, std::uint8_t* value) const
     {
         return false;
     }
-    *value = base_[address];
+    *value = *HostAt(base_, address);
     return true;
 }
 
@@ -164,7 +178,7 @@ bool GuestMemory::Read16(std::uint32_t address, std::uint16_t* value) const
     {
         return false;
     }
-    *value = static_cast<std::uint16_t>(base_[address] | (base_[address + 1] << 8));
+    *value = static_cast<std::uint16_t>(*HostAt(base_, address) | (*HostAt(base_, address + 1) << 8));
     return true;
 }
 
@@ -174,10 +188,10 @@ bool GuestMemory::Read32(std::uint32_t address, std::uint32_t* value) const
     {
         return false;
     }
-    *value = static_cast<std::uint32_t>(base_[address]) |
-             (static_cast<std::uint32_t>(base_[address + 1]) << 8) |
-             (static_cast<std::uint32_t>(base_[address + 2]) << 16) |
-             (static_cast<std::uint32_t>(base_[address + 3]) << 24);
+    *value = static_cast<std::uint32_t>(*HostAt(base_, address)) |
+             (static_cast<std::uint32_t>(*HostAt(base_, address + 1)) << 8) |
+             (static_cast<std::uint32_t>(*HostAt(base_, address + 2)) << 16) |
+             (static_cast<std::uint32_t>(*HostAt(base_, address + 3)) << 24);
     return true;
 }
 
@@ -187,7 +201,7 @@ bool GuestMemory::Write8(std::uint32_t address, std::uint8_t value)
     {
         return false;
     }
-    base_[address] = value;
+    *HostAt(base_, address) = value;
     return true;
 }
 
@@ -197,8 +211,8 @@ bool GuestMemory::Write16(std::uint32_t address, std::uint16_t value)
     {
         return false;
     }
-    base_[address] = static_cast<std::uint8_t>(value);
-    base_[address + 1] = static_cast<std::uint8_t>(value >> 8);
+    *HostAt(base_, address) = static_cast<std::uint8_t>(value);
+    *HostAt(base_, address + 1) = static_cast<std::uint8_t>(value >> 8);
     return true;
 }
 
@@ -208,10 +222,10 @@ bool GuestMemory::Write32(std::uint32_t address, std::uint32_t value)
     {
         return false;
     }
-    base_[address] = static_cast<std::uint8_t>(value);
-    base_[address + 1] = static_cast<std::uint8_t>(value >> 8);
-    base_[address + 2] = static_cast<std::uint8_t>(value >> 16);
-    base_[address + 3] = static_cast<std::uint8_t>(value >> 24);
+    *HostAt(base_, address) = static_cast<std::uint8_t>(value);
+    *HostAt(base_, address + 1) = static_cast<std::uint8_t>(value >> 8);
+    *HostAt(base_, address + 2) = static_cast<std::uint8_t>(value >> 16);
+    *HostAt(base_, address + 3) = static_cast<std::uint8_t>(value >> 24);
     return true;
 }
 
@@ -225,7 +239,7 @@ bool GuestMemory::ReadBytes(std::uint32_t address, std::uint8_t* bytes, std::siz
     {
         return false;
     }
-    std::memcpy(bytes, base_ + address, size);
+    std::memcpy(bytes, HostAt(base_, address), size);
     return true;
 }
 
@@ -239,7 +253,7 @@ bool GuestMemory::WriteBytes(std::uint32_t address, const std::uint8_t* bytes, s
     {
         return false;
     }
-    std::memcpy(base_ + address, bytes, size);
+    std::memcpy(HostAt(base_, address), bytes, size);
     return true;
 }
 
@@ -249,9 +263,7 @@ std::uint8_t* GuestMemory::HostPointer(std::uint32_t address, std::uint32_t size
     {
         return nullptr;
     }
-    // Integer arithmetic: with a null base (the identity mapping) pointer
-    // arithmetic on null would be undefined (Clang's UBSan reports it).
-    return reinterpret_cast<std::uint8_t*>(reinterpret_cast<std::uintptr_t>(base_) + address);
+    return HostAt(base_, address);
 }
 
 }  // namespace rex86

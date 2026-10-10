@@ -2,6 +2,10 @@
 
 근거: [#29 설계](../design/20261009-i029-mmx-and-sse.md) 결정 7 | 로그: [20261009-i029](../work-logs/20261009-i029-mmx-and-sse.md) | 실측 기록: [SIMD 호스트 대조](../analysis/simd-host-comparison.md)
 
+릴리스 규모의 실행은 tag push 때 GitHub Actions가 맡습니다([캠페인 가이드](fuzz-campaign.md)).
+
+*Release-scale runs happen on GitHub Actions at each tag push ([campaign guide](fuzz-campaign.md)).*
+
 `rex86_simd_fuzz`는 무작위 MMX 또는 SSE 명령 하나를 FXRSTOR와 FXSAVE 사이에서 호스트 CPU와 코어로 실행하고 결과를 비교합니다. x86 또는 x86-64 Linux에서만 빌드됩니다. CTest는 짧은 고정 시드 실행(`20000 1`)을 등록합니다.
 
 *`rex86_simd_fuzz` runs one random MMX or SSE instruction between FXRSTOR and FXSAVE on the host CPU and on the core and compares the results; it builds on x86 or x86-64 Linux only, and CTest registers a short fixed-seed run (`20000 1`).*

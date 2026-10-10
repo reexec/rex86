@@ -2,6 +2,10 @@
 
 근거: [#19 설계](../design/20261008-i019-x87-increment-1.md) 결정 6, [#25 설계](../design/20261008-i025-x87-transcendentals.md) 결정 5 | 로그: [20261008-i019](../work-logs/20261008-i019-x87-increment-1.md), [20261008-i025](../work-logs/20261008-i025-x87-transcendentals.md) | 실측 기록: [x87 호스트 대조](../analysis/x87-host-comparison.md)
 
+릴리스 규모의 실행은 tag push 때 GitHub Actions가 맡습니다([캠페인 가이드](fuzz-campaign.md)).
+
+*Release-scale runs happen on GitHub Actions at each tag push ([campaign guide](fuzz-campaign.md)).*
+
 `rex86_x87_fuzz`는 무작위 x87 명령 하나를 호스트 CPU와 코어에서 같은 입력으로 실행하고 결과를 비교합니다. x86 또는 x86-64 Linux에서만 빌드됩니다. CTest는 짧은 고정 시드 실행(`20000 1`)을 등록합니다.
 
 *`rex86_x87_fuzz` runs one random x87 instruction on the host CPU and on the core from the same input and compares the results; it builds on x86 or x86-64 Linux only, and CTest registers a short fixed-seed run (`20000 1`).*
