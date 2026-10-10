@@ -96,7 +96,7 @@ flowchart TB
 | `rex86_bench` | 실행 파일 | 벤치마크 하네스. 모든 호스트에서 빌드(wasm32는 `-sNODERAWFS`), 첫 줄에 `$<CONFIG>`를 적음. `--smoke`가 ctest(`rex86_bench_smoke`)로 모든 호스트에 등록 |
 | `rex86_robust_lib` | STATIC | 견고성 하네스의 케이스 생성과 불변식(`src/tools/robust/`). 단위 테스트가 링크 |
 | `rex86_robust` | 실행 파일 | 견고성 하네스 드라이버. 모든 호스트에서 빌드, `--cases 300`이 ctest(`rex86_robust_smoke`)로 모든 호스트와 새니타이저 작업에서 돈다 |
-| `rex86_robust_libfuzzer` | 실행 파일 | `REX86_LIBFUZZER=ON`(Clang)일 때만. rex86 타깃이 `-fsanitize=fuzzer-no-link`로 계측되며, CI `linux-x64-libfuzzer`가 ASan/UBSan과 함께 60초 돌린다 |
+| `rex86_robust_libfuzzer` | 실행 파일 | `REX86_LIBFUZZER=ON`(Clang)일 때만. rex86 타깃이 `-fsanitize=fuzzer-no-link`로 계측되며, CI `linux-x64-libfuzzer`가 ASan/UBSan과 함께 그 구성의 ctest 전체를 돌린 뒤 60초 돌린다(#37) |
 | `rex86_census` | 실행 파일 | 명령 census 도구. Emscripten에서는 빌드하지 않음 |
 | `rex86_sst` | 실행 파일 | SingleStepTests 러너. Emscripten 제외, `REX86_SST_DIR`로 ctest 등록 |
 

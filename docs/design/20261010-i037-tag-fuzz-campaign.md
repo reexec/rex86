@@ -61,10 +61,10 @@ flowchart LR
 * 정수 fuzz는 i386 프로세스가 필요하다(#22 결정 1). 브랜치 CI처럼 i386 컨테이너 대신 `gcc-multilib`의 `-m32` 빌드를 쓴다. JavaScript action(artifact 올리기)을 같은 작업에서 쓸 수 있고, #32에서 같은 방식으로 돌렸다.
 * trace 묶음은 이미 브랜치 CI의 ctest가 다섯 호스트에서 전부 재생하므로 다시 돌리지 않는다.
 * SST는 업스트림 저장소를 `--depth 1`로 받는다(약 1.2 GB). 받은 데이터는 저장소에 넣지 않는다(#7 설계).
-* libFuzzer 작업은 퍼저를 돌리기 전에 같은 구성(Clang RelWithDebInfo + ASan/UBSan)으로 전체 ctest를 돌린다. #32에서 놓친 종류의 UB를 잡는다. 브랜치 CI에 같은 단계를 더할지는 이 작업의 범위 밖으로 두고 작업 로그에 후속으로 적는다.
+* libFuzzer 작업은 퍼저를 돌리기 전에 같은 구성(Clang RelWithDebInfo + ASan/UBSan)으로 전체 ctest를 돌린다. #32에서 놓친 종류의 UB를 잡는다. 사용자 요청으로 브랜치 CI의 `linux-x64-libfuzzer` 작업에도 같은 단계를 더한다(작업 로그의 후속 절).
 * libFuzzer의 말뭉치(corpus)는 `actions/cache`로 릴리스 사이에 이어 쓴다. 캐시가 사라져도 결과의 정확성은 바뀌지 않는다.
 
-*The runners are public repositories' standard runners (4 vCPUs); each fuzz splits into four shard processes to use every core, aiming at under 60 minutes per job with `timeout-minutes` at 120. The throughputs behind the times in the table are estimates from #32's Intel Xeon 2.8 GHz VM; the first run measures the real times and the scales are corrected from them. The integer fuzz needs an i386 process (#22, decision 1); instead of the branch CI's i386 container it uses a `gcc-multilib` `-m32` build, so JavaScript actions (artifact upload) work in the same job, as #32 ran it. The trace corpus already replays in full on all five hosts in the branch CI's ctest and is not rerun. SST fetches the upstream repository at `--depth 1` (about 1.2 GB), never committed (#7 design). The libFuzzer job first runs the whole ctest in the same configuration (Clang RelWithDebInfo with ASan/UBSan), catching the kind of UB #32 missed; adding that step to the branch CI is outside this task and goes to the work log as a follow-up. libFuzzer's corpus carries over between releases through `actions/cache`; losing the cache changes no result's correctness.*
+*The runners are public repositories' standard runners (4 vCPUs); each fuzz splits into four shard processes to use every core, aiming at under 60 minutes per job with `timeout-minutes` at 120. The throughputs behind the times in the table are estimates from #32's Intel Xeon 2.8 GHz VM; the first run measures the real times and the scales are corrected from them. The integer fuzz needs an i386 process (#22, decision 1); instead of the branch CI's i386 container it uses a `gcc-multilib` `-m32` build, so JavaScript actions (artifact upload) work in the same job, as #32 ran it. The trace corpus already replays in full on all five hosts in the branch CI's ctest and is not rerun. SST fetches the upstream repository at `--depth 1` (about 1.2 GB), never committed (#7 design). The libFuzzer job first runs the whole ctest in the same configuration (Clang RelWithDebInfo with ASan/UBSan), catching the kind of UB #32 missed; at the user's request the branch CI's `linux-x64-libfuzzer` job gains the same step (the work log's follow-up section). libFuzzer's corpus carries over between releases through `actions/cache`; losing the cache changes no result's correctness.*
 
 ## 결정 3: 시드 / Decision 3: seeds
 
@@ -115,6 +115,22 @@ tag는 이미 push된 뒤라 캠페인이 tag를 막을 수는 없다. 그래서
 * 작업 단위의 검증 규칙(구현과 검증은 같은 작업에서 끝낸다)은 바뀌지 않는다. 명령 의미를 바꾸는 작업은 지금처럼 자기 범위의 fuzz를 작업 안에서 돌린다. 그 규모를 맞추고 싶으면 머지 전에 `workflow_dispatch`로 캠페인을 브랜치에서 돌린다.
 
 *The tag is already pushed, so the campaign cannot hold it back: it is a post-release verification record and does not replace verification before merging. A failing campaign does not delete or move the tag, since consumers' FetchContent may already point at it; the failure becomes an issue (reproducing seeds, artifact links), and a patch release follows the fix. Consumers' tag-bump tasks only take tags whose campaign is green. AGENTS.md's merge procedure gains: check the campaign after the tag push, and the next release notes' validation section records the previous release's campaign (run link, CPU model, scale), the same shape as today's rule of filling in the squash commit ID in the next notes. The per-task verification rule (implementation and verification end in the same task) stays: a task changing instruction semantics still runs its fuzz within the task, and can match the campaign's scale by dispatching it on the branch before merging.*
+
+## 결정 7: action의 Node.js 런타임 / Decision 7: the actions' Node.js runtime
+
+GitHub은 Node.js 20 기반 action을 Node.js 24로 강제 실행한다는 경고를 낸다(첫 smoke 캠페인과 `ci.yml` 모두). 두 워크플로의 action을 `runs.using: node24`인 주 버전으로 올린다. 각 버전의 `action.yml`에서 `node24`를 확인했다.
+
+| action | 전 | 후 |
+|---|---|---|
+| `actions/checkout` | v4 | v7 |
+| `actions/upload-artifact` | v4 | v7 |
+| `actions/cache/restore`, `actions/cache/save` | v4 | v6 |
+| `mymindstorm/setup-emsdk` | v14 | v16 |
+
+* 릴리스 노트의 깨지는 변경을 확인했다. checkout v7은 `pull_request_target`과 `workflow_run`에서 fork PR checkout을 막는데, 이 저장소는 두 트리거를 쓰지 않는다. upload-artifact v7은 `archive: false`일 때 여러 파일을 거절하는데, 이 저장소는 기본값(압축)으로 디렉터리를 올린다. upload-artifact v6과 cache v5 이상은 러너 2.327.1 이상을 요구하고, GitHub 호스트 러너는 이를 만족한다. setup-emsdk v16의 입력(`version`, `actions-cache-folder`)은 그대로다.
+* 주 버전 tag를 쓰는 지금의 관례를 유지한다.
+
+*GitHub warns that Node.js 20 actions are forced onto Node.js 24 (in the first smoke campaign and in `ci.yml` alike). Both workflows move to the major versions whose `action.yml` says `runs.using: node24`, checked for each, as in the table above. The release notes' breaking changes were checked: checkout v7 blocks fork PR checkouts under `pull_request_target` and `workflow_run`, triggers this repository does not use; upload-artifact v7 refuses several files with `archive: false`, while this repository uploads directories with the default (zipped); upload-artifact v6 and cache v5 and later need runner 2.327.1 or newer, which GitHub-hosted runners meet; setup-emsdk v16 keeps its inputs (`version`, `actions-cache-folder`). The current convention of major-version tags stays.*
 
 ## 소비자 영향 / Consumer impact
 

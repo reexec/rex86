@@ -42,7 +42,7 @@ jobs:
       scale: ${{ steps.plan.outputs.scale }}
       offset: ${{ steps.plan.outputs.offset }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: plan
         env:
           INPUT_SCALE: ${{ inputs.scale }}
@@ -83,7 +83,7 @@ jobs:
             cmake_extra: -DREX86_DECODE_CACHE_WARMUP=0
             base: 40000000
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y ninja-build g++-multilib
       - name: Build
@@ -99,7 +99,7 @@ jobs:
             build/i386/bin/rex86_int_fuzz {CASES} {SEED} --failures "$CAMPAIGN_LOG_DIR/int-{SHARD}.rxt"
       - name: Keep logs and failing cases
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: campaign-int-i386-warmup-${{ matrix.warmup }}
           path: campaign-logs/
@@ -109,7 +109,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y ninja-build g++-multilib
       - name: Build
@@ -138,7 +138,7 @@ jobs:
             build/i386/bin/rex86_simd_fuzz {CASES} {SEED}
       - name: Keep logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: campaign-x87-simd
           path: campaign-logs/
@@ -150,7 +150,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y ninja-build
       - name: Build
@@ -164,7 +164,7 @@ jobs:
             build/x64/bin/rex86_robust --cases {CASES} --seed {SEED}
       - name: Keep logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: campaign-robust-release
           path: campaign-logs/
@@ -176,7 +176,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y ninja-build
       - name: Build
@@ -191,7 +191,7 @@ jobs:
             build/asan/bin/rex86_robust --cases {CASES} --seed {SEED}
       - name: Keep logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: campaign-robust-asan
           path: campaign-logs/
@@ -204,7 +204,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y ninja-build
       - name: Build
@@ -218,7 +218,7 @@ jobs:
       - name: Test in this configuration
         run: ctest --test-dir build/libfuzzer --output-on-failure
       - name: Restore the corpus
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: libfuzzer-corpus
           key: libfuzzer-corpus-${{ github.run_id }}
@@ -233,13 +233,13 @@ jobs:
             -artifact_prefix="$CAMPAIGN_LOG_DIR/crashes/"
       - name: Save the corpus
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: libfuzzer-corpus
           key: libfuzzer-corpus-${{ github.run_id }}
       - name: Keep logs and crashing inputs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: campaign-libfuzzer
           path: campaign-logs/
@@ -250,7 +250,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y ninja-build
       - name: Build
@@ -264,7 +264,7 @@ jobs:
             build/arm64/bin/rex86_robust --cases {CASES} --seed {SEED}
       - name: Keep logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: campaign-robust-arm64
           path: campaign-logs/
@@ -278,7 +278,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y ninja-build
       - name: Build
@@ -306,7 +306,7 @@ jobs:
             build/x64/bin/rex86_sst "$RUNNER_TEMP/sst/shard-{SHARD}" --execute
       - name: Keep logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: campaign-sst
           path: campaign-logs/
