@@ -127,6 +127,10 @@ add_library(rex86_core STATIC
     src/interp/x87_stack.cpp
     src/interp/interpreter.cpp
     src/interp/decode_cache.cpp
+    src/translate/ir/ir.cpp
+    src/translate/ir/evaluator.cpp
+    src/translate/ir/frontend.cpp
+    src/translate/ir/optimize.cpp
 )
 add_library(rex86::core ALIAS rex86_core)
 target_include_directories(rex86_core PUBLIC
@@ -177,6 +181,12 @@ if(REX86_BUILD_TESTS)
     target_include_directories(rex86_robust_lib PUBLIC src)
     target_link_libraries(rex86_robust_lib PUBLIC rex86::core rex86_zydis PRIVATE rex86_warnings)
 
+    # The IR differential (design #43): shared by the unit tests and the
+    # long-run tool, portable to every host.
+    add_library(rex86_irdiff_lib STATIC src/tools/irdiff/irdiff.cpp)
+    target_include_directories(rex86_irdiff_lib PUBLIC src)
+    target_link_libraries(rex86_irdiff_lib PUBLIC rex86::core rex86_zydis PRIVATE rex86_warnings)
+
     add_executable(rex86_unit_tests
         tests/unit/main.cpp
         tests/unit/version_test.cpp
@@ -199,6 +209,7 @@ if(REX86_BUILD_TESTS)
         tests/unit/decode_cache_test.cpp
         tests/unit/block_test.cpp
         tests/unit/rep_budget_test.cpp
+        tests/unit/ir_test.cpp
         src/tools/census/census.cpp
         src/tools/sst/moo_reader.cpp
     )
@@ -208,8 +219,8 @@ if(REX86_BUILD_TESTS)
     # SoftFloat's include paths).
     target_include_directories(rex86_unit_tests PRIVATE src)
     target_link_libraries(rex86_unit_tests
-        PRIVATE rex86::core rex86_trace_format rex86_bench_lib rex86_robust_lib rex86_warnings
-                rex86_zydis rex86_softfloat)
+        PRIVATE rex86::core rex86_trace_format rex86_bench_lib rex86_robust_lib rex86_irdiff_lib
+                rex86_warnings rex86_zydis rex86_softfloat)
 
     add_executable(rex86_probe src/tools/probe/main.cpp)
     target_link_libraries(rex86_probe PRIVATE rex86::core rex86_warnings)
@@ -233,6 +244,9 @@ if(REX86_BUILD_TESTS)
     if(EMSCRIPTEN)
         target_link_options(rex86_bench PRIVATE -sNODERAWFS=1)
     endif()
+
+    add_executable(rex86_irdiff src/tools/irdiff/main.cpp)
+    target_link_libraries(rex86_irdiff PRIVATE rex86_irdiff_lib rex86_warnings)
 
     add_executable(rex86_robust src/tools/robust/main.cpp)
     target_link_libraries(rex86_robust PRIVATE rex86_robust_lib rex86_warnings)
@@ -312,6 +326,7 @@ if(REX86_BUILD_TESTS)
         add_test(NAME rex86_probe COMMAND node $<TARGET_FILE:rex86_probe>)
         add_test(NAME rex86_bench_smoke COMMAND node $<TARGET_FILE:rex86_bench> --smoke)
         add_test(NAME rex86_robust_smoke COMMAND node $<TARGET_FILE:rex86_robust> --cases 300)
+        add_test(NAME rex86_irdiff_smoke COMMAND node $<TARGET_FILE:rex86_irdiff> --cases 20000)
         if(REX86_TRACE_CORPUS)
             add_test(NAME rex86_trace_corpus
                 COMMAND node $<TARGET_FILE:rex86_trace> ${REX86_TRACE_CORPUS})
@@ -321,6 +336,7 @@ if(REX86_BUILD_TESTS)
         add_test(NAME rex86_probe COMMAND rex86_probe)
         add_test(NAME rex86_bench_smoke COMMAND rex86_bench --smoke)
         add_test(NAME rex86_robust_smoke COMMAND rex86_robust --cases 300)
+        add_test(NAME rex86_irdiff_smoke COMMAND rex86_irdiff --cases 20000)
         if(REX86_TRACE_CORPUS)
             add_test(NAME rex86_trace_corpus COMMAND rex86_trace ${REX86_TRACE_CORPUS})
         endif()

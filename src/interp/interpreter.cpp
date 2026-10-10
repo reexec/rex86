@@ -22,7 +22,7 @@ namespace
 
 constexpr std::uint32_t kPopfWritable = kEflagsPopWritable;
 
-constexpr unsigned kMaxInstructionBytes = 15;
+constexpr unsigned kMaxInstructionBytes = kFetchWindow;
 
 #if defined(_MSC_VER)
 #define REX86_NOINLINE __declspec(noinline)
@@ -732,6 +732,8 @@ bool UsesMmRegister(const decode::DecodedInstruction& decoded)
     return false;
 }
 
+}  // namespace
+
 // A disabled feature's instruction is an illegal instruction, per the
 // Features contract. RTM (XBEGIN/XABORT, which reuse the C7/C6 /7
 // encodings) is never part of this core's CPU and raises #UD as on every
@@ -811,8 +813,6 @@ unsigned Fetch(const CpuState& state, const GuestMemory& memory, std::uint8_t* b
     }
     return fetched;
 }
-
-}  // namespace
 
 namespace
 {

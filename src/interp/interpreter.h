@@ -14,10 +14,29 @@
 #include "rex86/environment.h"
 #include "rex86/guest_memory.h"
 
+namespace rex86::decode
+{
+struct DecodedInstruction;
+}
+
 namespace rex86::interp
 {
 
 class DecodeCache;
+
+// The longest IA-32 instruction.
+inline constexpr unsigned kFetchWindow = 15;
+
+// True when the instruction's feature is enabled; a disabled feature's
+// instruction raises #UD. The translation frontend asks the same question
+// before lowering an instruction (design #43).
+bool FeatureEnabled(const decode::DecodedInstruction& decoded, const Features& features);
+
+// Fetches up to kFetchWindow bytes at CS:EIP as the interpreter does,
+// stopping at the CS limit (*stopped_at_limit) or the first byte not
+// mapped readable and executable; returns the count fetched.
+unsigned Fetch(const CpuState& state, const GuestMemory& memory, std::uint8_t* bytes,
+               bool* stopped_at_limit);
 
 enum class StepStatus : std::uint8_t
 {
