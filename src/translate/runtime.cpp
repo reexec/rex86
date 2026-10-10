@@ -8,8 +8,11 @@
 namespace rex86::translate
 {
 
-Translator::Translator(std::unique_ptr<Backend> backend, const std::uint32_t threshold)
-    : backend_(std::move(backend)), threshold_(threshold)
+Translator::Translator(std::unique_ptr<Backend> backend, const std::uint32_t threshold,
+                       const std::uint32_t max_block_instructions)
+    : backend_(std::move(backend)),
+      threshold_(threshold),
+      max_block_instructions_(max_block_instructions == 0 ? 1u : max_block_instructions)
 {
 }
 
@@ -97,6 +100,7 @@ void Translator::Translate(Entry* entry, const CpuState& state, GuestMemory& mem
 {
     ir::FrontendOptions options;
     options.gates = gates;
+    options.max_instructions = max_block_instructions_;
     Translation translation;
     if (!ir::FormBlock(state, memory, features, options, &translation.block))
     {

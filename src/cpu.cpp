@@ -88,7 +88,8 @@ bool Cpu::SetTranslation(const TranslationOptions& options)
             return true;
         case TranslationMode::kEvaluator:
             translator_ = std::make_unique<translate::Translator>(
-                std::make_unique<translate::EvaluatorBackend>(), options.threshold);
+                std::make_unique<translate::EvaluatorBackend>(), options.threshold,
+                options.max_block_instructions);
             return true;
         case TranslationMode::kWasm:
             if (!translate::wasm::Runnable() || options.wasm == nullptr)
@@ -99,7 +100,8 @@ bool Cpu::SetTranslation(const TranslationOptions& options)
                 return false;
             }
             translator_ = std::make_unique<translate::Translator>(
-                std::make_unique<translate::wasm::WasmBackend>(options.wasm), options.threshold);
+                std::make_unique<translate::wasm::WasmBackend>(options.wasm), options.threshold,
+                options.max_block_instructions);
             return true;
     }
     return false;

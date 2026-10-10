@@ -130,6 +130,35 @@ void BudgetTests(rex86::test::Context& context)
     }
 }
 
+// With one instruction per block, single steps run translated and still
+// match the interpreter step by step (design #46).
+void SingleInstructionBlockTests(rex86::test::Context& context)
+{
+    rex86::TranslationOptions options = Evaluator(0);
+    options.max_block_instructions = 1;
+    Rig interpreted(kLoop, Interpreter());
+    Rig translated(kLoop, options);
+    bool same = true;
+    for (int i = 0; i < 300; ++i)
+    {
+        const rex86::Event a = interpreted.cpu.Step();
+        const rex86::Event b = translated.cpu.Step();
+        same = same && SameEvent(a, b) && SameMachine(interpreted, translated);
+    }
+    REX86_CHECK(context, same);
+    REX86_CHECK(context, translated.cpu.translation_stats().translated_steps > 250);
+    // Blocks longer than the budget never run, so at the default length
+    // single steps run translated only where a block is one instruction
+    // long (the jnz, reached by stepping).
+    Rig longer(kLoop, Evaluator(0));
+    for (int i = 0; i < 300; ++i)
+    {
+        longer.cpu.Step();
+    }
+    REX86_CHECK(context, longer.cpu.translation_stats().translated_steps * 2 <
+                             translated.cpu.translation_stats().translated_steps);
+}
+
 // A store the check refuses: the interpreter runs the instruction and
 // raises the same fault, after the same steps.
 void FaultTests(rex86::test::Context& context)
@@ -223,6 +252,7 @@ void RunTranslateRuntimeTests(rex86::test::Context& context)
 {
     LoopTests(context);
     BudgetTests(context);
+    SingleInstructionBlockTests(context);
     FaultTests(context);
     GateTests(context);
     SelfModifyingTests(context);

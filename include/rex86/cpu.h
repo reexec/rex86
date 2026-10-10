@@ -52,6 +52,9 @@ struct TranslationOptions
     std::uint32_t threshold = 32;
     // For kWasm: the host's module installer.
     WasmModuleServices* wasm = nullptr;
+    // The longest block, in instructions. A block runs only when the budget
+    // covers it whole, so 1 lets single steps run translated (design #46).
+    std::uint32_t max_block_instructions = 64;
 };
 
 // The translation every Cpu made afterwards starts with (process-wide), so

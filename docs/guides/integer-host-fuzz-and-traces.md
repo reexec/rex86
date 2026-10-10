@@ -28,6 +28,8 @@
    for seed in $(seq 100 109); do ./build/linux-x86-release/bin/rex86_int_fuzz 1000000 $seed | head -1; done
    ```
 
+   `--translate`를 붙이면 코어 쪽을 번역(IR 평가기, 명령 하나에 블록 하나)으로 재생합니다([#46](../design/20261010-i046-translation-campaign.md)). 호스트 쪽 기대값은 같으므로 번역을 하드웨어와 직접 비교합니다.
+
 3. 불일치는 `--failures <파일>`로 trace가 되어 어느 호스트에서든 재현됩니다. `MISMATCH` 줄에 그 파일 안의 사례 번호가 붙습니다.
 
    ```bash
@@ -37,7 +39,7 @@
 
 4. 새로 확인한 동작은 `docs/analysis/integer-host-comparison.md`에 확인됨/추정/미확정과 측정 호스트(제조사, family/model/stepping)를 밝혀 기록합니다. SDM이 분명하면 코어를 SDM에 맞추고, 침묵하면 실측값을 쓰되 SingleStepTests(386EX)와 충돌하지 않는지 `rex86_sst --execute`로 확인합니다. 세대마다 다른 동작은 마스크하고 분석 문서에 적습니다.
 
-*Build for i386 (with multilib on a 64-bit machine; Release is faster for long runs), run long seeds (the last line's `mismatches` must be 0, `vendor_deviations` counting the analysis topic's vendor deviations, Zen 5's CMPS fault address and Zen 3's BOUND read order, apart and out of `--record`; `--stats` prints retired and faulted counts per mnemonic, `--only <mnemonic>` runs one form), turn mismatches into traces with `--failures <file>` (each `MISMATCH` line names its case number) and spell one out with `rex86_trace --dump`, then record new facts in the analysis topic with their status and the host's vendor and family/model/stepping. Fix the core toward the SDM where it is clear; where it is silent, adopt the measurement after checking `rex86_sst --execute` still agrees with the 386EX; mask what differs between generations and say so in the analysis.*
+*Build for i386 (with multilib on a 64-bit machine; Release is faster for long runs), run long seeds (the last line's `mismatches` must be 0, `vendor_deviations` counting the analysis topic's vendor deviations, Zen 5's CMPS fault address and Zen 3's BOUND read order, apart and out of `--record`; `--stats` prints retired and faulted counts per mnemonic, `--only <mnemonic>` runs one form), with `--translate` replaying the core side through translation (the IR evaluator, one instruction per block, #46) against the same host expectations; turn mismatches into traces with `--failures <file>` (each `MISMATCH` line names its case number) and spell one out with `rex86_trace --dump`, then record new facts in the analysis topic with their status and the host's vendor and family/model/stepping. Fix the core toward the SDM where it is clear; where it is silent, adopt the measurement after checking `rex86_sst --execute` still agrees with the 386EX; mask what differs between generations and say so in the analysis.*
 
 ## trace 묶음 다시 만들기 / Regenerating the corpus
 

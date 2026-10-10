@@ -17,6 +17,7 @@
 #include "rex86/environment.h"
 #include "rex86/guest_memory.h"
 #include "translate/ir/evaluator.h"
+#include "translate/ir/frontend.h"
 #include "translate/ir/ir.h"
 
 namespace rex86::translate
@@ -82,7 +83,8 @@ public:
     // Entries beyond this drop every translation.
     static constexpr std::size_t kMaxEntries = 65536;
 
-    Translator(std::unique_ptr<Backend> backend, std::uint32_t threshold);
+    Translator(std::unique_ptr<Backend> backend, std::uint32_t threshold,
+               std::uint32_t max_block_instructions = ir::kMaxBlockInstructions);
     ~Translator();
     Translator(const Translator&) = delete;
     Translator& operator=(const Translator&) = delete;
@@ -137,6 +139,7 @@ private:
 
     std::unique_ptr<Backend> backend_;
     std::uint32_t threshold_;
+    std::uint32_t max_block_instructions_;
     std::unordered_map<std::uint32_t, Entry> entries_;
     // Pending installations: ticket to block head.
     std::unordered_map<std::uint32_t, std::uint32_t> pending_;

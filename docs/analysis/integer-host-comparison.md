@@ -62,6 +62,12 @@ SDM이 미정의로 두는 것과 호스트의 인공물은 비교에서 뺀다(
 
 *Confirmed (2026-10-09, AMD Ryzen 5 5600X, Zen 3, i386 process): BOUND reads both bounds before comparing. With the index below the lower bound and the upper bound on an unreachable page (the guard at 0x13000), the Intel Cascade Lake and the core raise #BR while Zen 3 page-faults at the upper bound; 32 cases in 2.5M (seeds 1 and 101-104 × 500,000), unseen before for lack of a long AMD run. The core keeps Intel's order (consistent with the 386EX SST); the fuzz counts the case under `vendor_deviations` only when the core raises #BR, the host's CR2 lies in the upper bound and outside the mapping, and the case matches once the host's fault reads as #BR. The same runs had no CMPS deviation: Zen 3 agrees with Intel on CMPS and differs on BOUND.*
 
+## 3.1 번역 재생 / The translated replay (2026-10-10, #46)
+
+**확인됨(AMD Ryzen 5 5600X, Zen 3, i386 Release 프로세스)**: `rex86_int_fuzz --translate`는 코어 쪽 재생을 번역(IR 평가기, 명령 하나에 블록 하나)으로 한다. 8 × 125만 건(시드 4600000~4600007) 1,000만 건에서 불일치 0, `vendor_deviations` 100이다. 100만 건당 10건으로, 번역 없이 잰 Zen 3의 BOUND 이탈 비율과 같다. 같은 실행기로 프런트엔드에 AF 결함을 넣으면 2만 건에 584건이 불일치하고, `--translate` 없이는 0건이다. 그래서 이 실행이 실제로 번역을 하드웨어와 비교한다는 것도 확인했다.
+
+*Confirmed (AMD Ryzen 5 5600X, Zen 3, i386 Release process): `rex86_int_fuzz --translate` replays the core side through translation (the IR evaluator, one instruction per block); 10M cases in 8 × 1.25M (seeds 4600000-4600007) give zero mismatches and 100 vendor deviations, 10 per million, Zen 3's BOUND deviation rate measured without translation. With an AF defect put into the frontend, the same run gives 584 mismatches in 20,000 cases and none without `--translate`, confirming that this run really compares translation with the hardware.*
+
 ## 4. 미확정 / Unresolved
 
 * AMD Zen 5의 긴 실행(CI는 5만 건뿐)과 P6 세대 실물에서의 위 모든 항목. Zen 3은 2026-10-09에 250만 건을 돌렸다. 확인 방법: 그 호스트의 i386 프로세스에서 `rex86_int_fuzz`를 긴 시드로 실행한다(가이드).
