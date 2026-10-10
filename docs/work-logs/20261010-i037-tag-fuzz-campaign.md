@@ -60,3 +60,24 @@
   - 성능: cachegrind의 단계당 호스트 명령이 수정 전과 같다(alu 505.75, memory 492.83, call 493.11). 바이트별 주소 계산도 컴파일러가 한 번의 읽기와 쓰기로 합친다.
 
 *At the user's request two of the previous section's follow-up candidates were handled in this task. The branch CI's libFuzzer job now builds everything instead of the fuzzer target alone and runs `ctest --test-dir build/libfuzzer` before fuzzing, so the unit tests under Clang `-O2` with UBSan run on every branch push (design decision 2 corrected). The Node.js 20 deprecation (design decision 7): both workflows' actions moved to `node24` major versions, checkout v4 to v7, upload-artifact v4 to v7, cache/restore and cache/save v4 to v6, setup-emsdk v14 to v16, each version's `action.yml` checked for `runs.using: node24` and the release notes' breaking changes checked against this repository's use (design decision 7). `GuestMemory`'s null-base UB (#32 log's unresolved item, at the user's request): `Read8/16/32`, `Write8/16/32`, `ReadBytes`, `WriteBytes` and `HostPointer` all go through a file-local `HostAt(base, address)`, which adds as integers before converting to a pointer, so the identity mapping (null base) does no pointer arithmetic on null; each byte gets its own address (indexing from the first would be null arithmetic again at address 0); the public header is unchanged. Unit tests: on 32-bit hosts (i386, wasm32) a real host buffer's address is a guest address, so 16 checks read and write that buffer through the identity mapping; on 64-bit hosts they only compile. Reproduced and confirmed: in a Clang 18 `-m32` UBSan build the new test stopped the code before the fix at `Write32` with "applying non-zero offset ... to null pointer"; after it, checks 1,866, failures 0. Builds and ctest: x86-64 Debug, ASan/UBSan and the Clang libFuzzer configuration 7/7, i386 Debug and Release 8/8, wasm32 5/5 (unit checks 1,866). Performance: cachegrind's host instructions per step are unchanged (alu 505.75, memory 492.83, call 493.11); the compiler still merges the per-byte addresses into one load or store.*
+
+## 2026-10-10 (첫 전체 규모 실행 / the first full-scale run)
+
+v0.0.20 tag push로 캠페인이 처음 전체 규모로 돌았다([run 38024665398](https://github.com/reexec/rex86/actions/runs/38024665398), 시드 오프셋 2,000,000,000). 9개 작업이 모두 녹색이다. x86 작업은 모두 AMD EPYC 7763(Zen 3)에 걸렸고, AArch64는 Neoverse-N2였다.
+
+| 작업 | 규모 | 결과 | 작업 시간 |
+|---|---|---|---|
+| int-i386 예열 기본값 | 2,000만 | 불일치 0, `vendor_deviations` 216 | 9분 29초 |
+| int-i386 예열 0 | 2,000만 | 불일치 0, `vendor_deviations` 238 | 18분 18초 |
+| x87-simd | x87 1억, SIMD x86-64 1억, i386 2,000만 | 불일치 0. x87 SDM 이탈 619,016(0.62%), 허용 149,894. SIMD 허용 2,193,112와 437,514 | 13분 29초 |
+| robust-release | 100만 | 위반 0 | 14분 38초 |
+| robust-asan | 10만 | 위반 0 | 13분 38초 |
+| libfuzzer | ctest 7/7, 1,832초 | 크래시 0 | 32분 9초 |
+| robust-arm64 | 50만 | 위반 0 | 5분 7초 |
+| sst | 941 파일, 1,741,900건 실행 | 불일치 0 | 1분 0초 |
+
+- 전체 실행은 32분 15초였고 가장 긴 작업은 libFuzzer(고정 30분)다. 설계 결정 2의 목표(작업당 60분 안)를 모든 작업이 지킨다. 추정했던 시간보다 대부분 짧지만, 규모는 그대로 둔다. 러너 CPU에 따라 처리량이 바뀌고(이 실행은 모두 Zen 3), 여유가 있어야 느린 러너에서도 한도 안에 든다.
+- 정수의 `vendor_deviations`(100만 건당 약 11건)는 Zen 3의 BOUND 이탈 비율과 같다. x87의 SDM 이탈 0.62%는 분석에 적힌 두 제조사 공통의 이탈(0.63%)과 같다.
+- 이 실행에는 Zen 5 러너가 없었으므로 [#40](https://github.com/reexec/rex86/issues/40)의 사례를 만나지 않았다. 그 판정 수정은 v0.0.21에 들어간다.
+
+*The v0.0.20 tag push ran the campaign at full scale for the first time (run 38024665398, seed offset 2,000,000,000), green in all nine jobs, every x86 job on an AMD EPYC 7763 (Zen 3) and AArch64 on a Neoverse-N2, as in the table above. The whole run took 32 min 15 s, its longest job libFuzzer at a fixed 30 minutes; every job meets design decision 2's target (under 60 minutes per job). Most times came in below the estimates, but the scales stay: throughput depends on the runner CPU (all Zen 3 here), and the margin keeps a slower runner within the limit. The integer `vendor_deviations` (about 11 per million) match Zen 3's BOUND deviation rate, and the x87's 0.62% SDM deviations match the deviation both vendors share in the analysis (0.63%). No Zen 5 runner took part, so #40's case did not arise; its verdict fix goes into v0.0.21.*
