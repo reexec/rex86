@@ -1,0 +1,14 @@
+{
+  "name": "rex86-browser-tests",
+  "private": true,
+  "description": "The browser runner for rex86's Emscripten tools (design #48)",
+  "license": "BSD-3-Clause",
+  "type": "module",
+  "scripts": {
+    "drive": "node drive.mjs",
+    "serve": "node serve.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}

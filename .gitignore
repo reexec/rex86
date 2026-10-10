@@ -24,3 +24,6 @@
 *.suo
 compile_commands.json
 __pycache__/
+
+# The browser runner's npm install (tests/host/web/package.json).
+node_modules/
