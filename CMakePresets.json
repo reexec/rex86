@@ -53,6 +53,14 @@
       "binaryDir": "${sourceDir}/build/web-wasm-release",
       "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "REX86_BUILD_TESTS": "ON" }
+    },
+    {
+      "name": "web-browser-release",
+      "displayName": "wasm32 Release for browsers (Emscripten; set EMSDK; tests/host/web/drive.mjs)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/web-browser-release",
+      "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "REX86_BUILD_TESTS": "ON", "REX86_BROWSER": "ON" }
     }
   ],
   "buildPresets": [
@@ -62,7 +70,8 @@
     { "name": "linux-arm64-debug", "configurePreset": "linux-arm64-debug" },
     { "name": "windows-x86-debug", "configurePreset": "windows-x86-debug", "configuration": "Debug" },
     { "name": "windows-x86-release", "configurePreset": "windows-x86-debug", "configuration": "Release" },
-    { "name": "web-wasm-release", "configurePreset": "web-wasm-release" }
+    { "name": "web-wasm-release", "configurePreset": "web-wasm-release" },
+    { "name": "web-browser-release", "configurePreset": "web-browser-release" }
   ],
   "testPresets": [
     { "name": "linux-x64-debug", "configurePreset": "linux-x64-debug", "output": { "outputOnFailure": true } },

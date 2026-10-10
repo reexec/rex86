@@ -8,6 +8,7 @@
 | --- | --- | --- | --- |
 | Zydis (+ Zycore) | v4.1.1 | MIT | `third_party/zydis/` |
 | Berkeley SoftFloat | Release 3e | BSD 3-Clause | `third_party/softfloat/` |
+| Playwright (+ playwright-core) | 1.63.0 | Apache-2.0 | `tests/host/web/package.json` (npm 개발 의존성, 저장소에 넣지 않음 / an npm dev dependency, not committed) |
 
 ## Zydis v4.1.1
 
@@ -37,3 +38,12 @@ SHA-256 values:
 
 - `COPYING.txt`: `145EA96B4A4A04A1A7738D2A2BF9E830F861971E69606187B018D9E8FC0B95C7`
 - `source/` (sorted `sha256sum` listing of every `.c` and `.h`, hashed again): `F08D68ADE22D292157ADCC35B8B10B7AFC20BBAAB01052DABCE51BAB02358479`
+
+## Playwright 1.63.0
+
+브라우저 테스트(#48)의 드라이버 `tests/host/web/drive.mjs`가 Playwright로 Chromium, Firefox, WebKit을 띄운다. `package.json`과 `package-lock.json`이 버전(1.63.0)과 무결성 해시를 고정한다. 패키지는 `npm ci`가 받아 오고 저장소에 넣지 않는다. 테스트 도구로만 쓰며, rex86 라이브러리와 소비자 빌드에는 들어가지 않는다. Playwright가 받아 오는 브라우저 실행 파일도 CI와 개발 기계에서 테스트를 돌리는 데만 쓰고, 저장소에 넣거나 배포하지 않는다.
+
+*The browser test driver `tests/host/web/drive.mjs` (#48) starts Chromium, Firefox and WebKit through Playwright. `package.json` and `package-lock.json` pin the version (1.63.0) and integrity hashes; `npm ci` fetches the package, which is not committed. It is a test tool only and enters neither the rex86 library nor consumer builds. The browser executables Playwright downloads are likewise only run for tests in CI and on development machines, never committed or distributed.*
+
+- Project: https://github.com/microsoft/playwright
+- License: Apache License 2.0 (https://github.com/microsoft/playwright/blob/main/LICENSE)

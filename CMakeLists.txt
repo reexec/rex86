@@ -39,6 +39,13 @@ string(TOUPPER "${REX86_FORCE_TRANSLATION}" REX86_FORCE_TRANSLATION_MODE)
 if(REX86_FORCE_TRANSLATION_MODE STREQUAL "WASM" AND NOT EMSCRIPTEN)
     message(FATAL_ERROR "REX86_FORCE_TRANSLATION=WASM needs an Emscripten build")
 endif()
+# The test tools built for browsers (design #48, decision 1): no Node
+# filesystem, an exit code delivered to the page, the trace corpus embedded.
+# tests/host/web/drive.mjs runs them; ctest registers nothing.
+option(REX86_BROWSER "Build the Emscripten test tools for browsers" OFF)
+if(REX86_BROWSER AND NOT EMSCRIPTEN)
+    message(FATAL_ERROR "REX86_BROWSER needs an Emscripten build")
+endif()
 
 if(PROJECT_IS_TOP_LEVEL)
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
@@ -161,7 +168,10 @@ target_link_libraries(rex86_core PRIVATE rex86_warnings rex86_zydis rex86_softfl
 # The web host's adapter (design #45): a WasmModuleServices that installs
 # generated modules from JavaScript. Consumers' Worker builds link it.
 if(EMSCRIPTEN)
-    add_library(rex86_host_web STATIC src/host/web/wasm_module_services.cpp)
+    add_library(rex86_host_web STATIC
+        src/host/web/wasm_module_services.cpp
+        src/host/web/async_wasm_module_services.cpp
+    )
     target_include_directories(rex86_host_web PUBLIC src)
     target_link_libraries(rex86_host_web PUBLIC rex86::core PRIVATE rex86_warnings)
     target_link_options(rex86_host_web INTERFACE
@@ -179,6 +189,11 @@ if(REX86_BUILD_TESTS)
     # as a browser consumer does.
     if(EMSCRIPTEN)
         add_link_options(-sALLOW_MEMORY_GROWTH=1)
+    endif()
+    # A page learns a tool's result from its exit code, which Emscripten
+    # delivers only when the runtime exits.
+    if(REX86_BROWSER)
+        add_link_options(-sEXIT_RUNTIME=1)
     endif()
 
     # The trace format and replay (design #22, decision 5): outside the
@@ -265,7 +280,10 @@ if(REX86_BUILD_TESTS)
     # host (design #22, decision 5).
     add_executable(rex86_trace src/tools/trace/main.cpp)
     target_link_libraries(rex86_trace PRIVATE rex86_trace_format rex86_warnings)
-    if(EMSCRIPTEN)
+    if(REX86_BROWSER)
+        target_link_options(rex86_trace PRIVATE
+            "SHELL:--embed-file ${CMAKE_CURRENT_SOURCE_DIR}/tests/traces@/traces")
+    elseif(EMSCRIPTEN)
         target_link_options(rex86_trace PRIVATE -sNODERAWFS=1)
     endif()
     # rex86_bench measures on every host; --dump writes files, which under
@@ -277,7 +295,7 @@ if(REX86_BUILD_TESTS)
     if(MSVC)
         target_compile_definitions(rex86_bench PRIVATE _CRT_SECURE_NO_WARNINGS)
     endif()
-    if(EMSCRIPTEN)
+    if(EMSCRIPTEN AND NOT REX86_BROWSER)
         target_link_options(rex86_bench PRIVATE -sNODERAWFS=1)
     endif()
 
@@ -294,6 +312,18 @@ if(REX86_BUILD_TESTS)
 
     file(GLOB REX86_TRACE_CORPUS CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/traces/*.rxt")
+    # The browser runner learns the embedded corpus from a manifest next to
+    # the tools.
+    if(REX86_BROWSER)
+        set(REX86_TRACE_NAMES "")
+        foreach(trace ${REX86_TRACE_CORPUS})
+            get_filename_component(trace_name "${trace}" NAME)
+            list(APPEND REX86_TRACE_NAMES "\"/traces/${trace_name}\"")
+        endforeach()
+        list(JOIN REX86_TRACE_NAMES ", " REX86_TRACE_NAMES)
+        file(CONFIGURE OUTPUT "${CMAKE_BINARY_DIR}/bin/rex86_browser.json"
+            CONTENT "{\"traces\": [${REX86_TRACE_NAMES}]}\n")
+    endif()
 
     # The census tool reads dump files off the host filesystem, and
     # measurement happens on native hosts, so it is not built under
@@ -363,6 +393,11 @@ if(REX86_BUILD_TESTS)
             target_link_libraries(${tool} PRIVATE rex86_host_web)
             target_compile_definitions(${tool} PRIVATE REX86_HOST_WEB=1)
         endforeach()
+        # The asynchronous installer's test (design #48, decision 2) runs on
+        # a frame loop, under Node and on a page's main thread.
+        add_executable(rex86_async_test tests/host/web/async_test.cpp)
+        target_link_libraries(rex86_async_test PRIVATE rex86_host_web rex86_warnings)
+        target_link_options(rex86_async_test PRIVATE -sEXIT_RUNTIME=1)
         if(REX86_FORCE_TRANSLATION_MODE STREQUAL "WASM")
             add_library(rex86_force_wasm OBJECT src/host/web/force_wasm.cpp)
             target_link_libraries(rex86_force_wasm PRIVATE rex86_host_web rex86_warnings)
@@ -374,8 +409,11 @@ if(REX86_BUILD_TESTS)
 
     # Under Emscripten an executable is a .js loader plus a .wasm module, and
     # CTest runs it through Node.
-    if(EMSCRIPTEN)
+    if(REX86_BROWSER)
+        # Browser builds are run by tests/host/web/drive.mjs.
+    elseif(EMSCRIPTEN)
         add_test(NAME rex86_unit_tests COMMAND node $<TARGET_FILE:rex86_unit_tests>)
+        add_test(NAME rex86_async_test COMMAND node $<TARGET_FILE:rex86_async_test>)
         add_test(NAME rex86_probe COMMAND node $<TARGET_FILE:rex86_probe>)
         add_test(NAME rex86_bench_smoke COMMAND node $<TARGET_FILE:rex86_bench> --smoke)
         add_test(NAME rex86_robust_smoke COMMAND node $<TARGET_FILE:rex86_robust> --cases 300)

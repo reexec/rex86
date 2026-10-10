@@ -187,3 +187,35 @@ jobs:
         run: cmake --build build/web-wasm-translate
       - name: Test (forced wasm translation)
         run: ctest --test-dir build/web-wasm-translate --output-on-failure
+
+  # The Emscripten tools in real browsers (design #48): Chromium (V8),
+  # Firefox (SpiderMonkey) and WebKit (JavaScriptCore) through Playwright,
+  # each running the whole browser suite of tests/host/web.
+  browsers:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: mymindstorm/setup-emsdk@v16
+        with:
+          version: 3.1.74
+          actions-cache-folder: emsdk-cache
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: tests/host/web/package-lock.json
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Configure
+        run: emcmake cmake -S . -B build/web-browser-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DREX86_WARNINGS_AS_ERRORS=ON -DREX86_BROWSER=ON
+      - name: Build
+        run: cmake --build build/web-browser-release
+      - name: Install Playwright and its browsers
+        working-directory: tests/host/web
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium firefox webkit
+      - name: Test
+        working-directory: tests/host/web
+        run: node drive.mjs --bin ../../../build/web-browser-release/bin
