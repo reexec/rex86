@@ -137,10 +137,10 @@ sequenceDiagram
   ```
 
   `Cpu`에는 `CompleteWasmModule(ticket, const std::uint32_t* table_indices, count)`와 `FailWasmModule(ticket)`, 생성자나 설정 함수로 `WasmModuleServices*`를 받는 길을 더한다. 정확한 이름과 위치는 wasm 하위 이슈의 세부 설계에서 정한다.
-* **참조 호스트 어댑터**: Emscripten JS 라이브러리 하나(`Submit`을 구현하고 결과를 `CompleteWasmModule`로 돌려줌)를 저장소에 둔다. 테스트와 Node 하네스가 쓰고, 두 소비자도 그대로 가져다 쓸 수 있다. 코어 라이브러리(`src/`, `include/`)에는 넣지 않는다. 위치(`src/host/web/` 새 디렉터리 또는 `src/tools/`)는 **사용자 결정 사항**이다. 새 디렉터리면 AGENTS.md의 구현 규칙에 그 목적을 더한다.
+* **참조 호스트 어댑터**: Emscripten JS 라이브러리 하나(`Submit`을 구현하고 결과를 `CompleteWasmModule`로 돌려줌)를 저장소에 둔다. 테스트와 Node 하네스가 쓰고, 두 소비자도 그대로 가져다 쓸 수 있다. 코어 라이브러리(`src/` 아래의 코어 파일, `include/`)에는 넣지 않는다. 위치는 새 디렉터리 `src/host/web/`다(**사용자 결정**, 2026-10-10). 소비자가 가져다 쓰는 호스트 어댑터의 자리이고, 나중의 AArch64용 `CodeCacheServices` 참조 구현도 같은 꼴(`src/host/<호스트>/`)로 둔다. 디렉터리를 만드는 하위 이슈 3에서 AGENTS.md 구현 규칙에 그 목적을 더한다.
 * `CodeCacheServices`(실행 메모리)는 AArch64 백엔드(5단계)를 위해 그대로 둔다. wasm에는 실행 메모리가 없으므로 두 계약은 따로다.
 
-*Confirmed (spike, 2026-10-10, emsdk 3.1.74, Node 24.19, AMD Ryzen 5 5600X): a 68-byte module built in C++ (wasm32) was instantiated by JS against the same linear memory with `new WebAssembly.Module` and `Instance(module, { env: { memory: wasmMemory } })` and added to the table with `addFunction`; C++ turned the returned index into a function pointer and called it, 3.0 ns per call reading and writing memory, 216 µs per installation, with the right result (41 to 42, and 10,000,041 after 10M calls). So the core calls generated code with no emscripten header (kb). The block function is `i32 block(i32 cpu_state)`, returning an exit code (kind and steps run); the module imports `env.memory`; guest memory's base is a wasm linear address folded into the `load`/`store` constant offset (#1's design), and the page attribute table lives in the same memory, so checks read its bytes directly. The public contract gains `WasmModuleServices` (above) in `include/rex86/environment.h`, and `Cpu` gains `CompleteWasmModule(ticket, const std::uint32_t* table_indices, count)`, `FailWasmModule(ticket)` and a way to take a `WasmModuleServices*` through its constructor or a setter, exact names and places settled in the wasm sub-issue's detailed design. A reference host adapter, one Emscripten JS library implementing `Submit` and answering through `CompleteWasmModule`, lives in the repository for the tests and the Node harness, and both consumers can take it as is; it stays out of the core library (`src/`, `include/`), its place (a new `src/host/web/` or `src/tools/`) being the user's decision, a new directory adding its purpose to AGENTS.md's implementation rules. `CodeCacheServices` (executable memory) stays for the AArch64 backend (phase 5); wasm has no executable memory, so the two contracts stay apart.*
+*Confirmed (spike, 2026-10-10, emsdk 3.1.74, Node 24.19, AMD Ryzen 5 5600X): a 68-byte module built in C++ (wasm32) was instantiated by JS against the same linear memory with `new WebAssembly.Module` and `Instance(module, { env: { memory: wasmMemory } })` and added to the table with `addFunction`; C++ turned the returned index into a function pointer and called it, 3.0 ns per call reading and writing memory, 216 µs per installation, with the right result (41 to 42, and 10,000,041 after 10M calls). So the core calls generated code with no emscripten header (kb). The block function is `i32 block(i32 cpu_state)`, returning an exit code (kind and steps run); the module imports `env.memory`; guest memory's base is a wasm linear address folded into the `load`/`store` constant offset (#1's design), and the page attribute table lives in the same memory, so checks read its bytes directly. The public contract gains `WasmModuleServices` (above) in `include/rex86/environment.h`, and `Cpu` gains `CompleteWasmModule(ticket, const std::uint32_t* table_indices, count)`, `FailWasmModule(ticket)` and a way to take a `WasmModuleServices*` through its constructor or a setter, exact names and places settled in the wasm sub-issue's detailed design. A reference host adapter, one Emscripten JS library implementing `Submit` and answering through `CompleteWasmModule`, lives in the repository for the tests and the Node harness, and both consumers can take it as is; it stays out of the core library (the core files under `src/`, and `include/`), in a new directory `src/host/web/` (the user's decision, 2026-10-10): the place of host adapters consumers take, where a later `CodeCacheServices` reference for AArch64 follows the same shape (`src/host/<host>/`); sub-issue 3, which creates the directory, adds its purpose to AGENTS.md's implementation rules. `CodeCacheServices` (executable memory) stays for the AArch64 backend (phase 5); wasm has no executable memory, so the two contracts stay apart.*
 
 ## 결정 9: 검증 / Decision 9: verification
 
@@ -170,10 +170,10 @@ sequenceDiagram
 
 | 순서 | 하위 이슈 | 완료 조건 |
 |---|---|---|
-| 1 | IR, 프런트엔드(결정 3의 첫 범위), IR 평가기, 형태별 차등 단위 테스트 | 첫 범위의 모든 형태가 무작위 상태 차등에서 인터프리터와 일치, 다섯 호스트 CI |
-| 2 | 번역 실행기: 번역 캐시, 디스패치, 계층화, 탈출, 예산, 게이트, SMC, 테스트용 엔진 설정. 평가기를 백엔드로 끝까지 연결 | 번역 강제 모드에서 기존 단위 테스트, trace 묶음, SST, 견고성 차등이 모든 호스트에서 통과 |
-| 3 | wasm 백엔드, `WasmModuleServices`, 참조 JS 어댑터, Node 하네스 | wasm32에서 번역 강제 모드 전체 통과, 벤치마크의 첫 기록 |
-| 4 | 캠페인과 하네스 통합(번역 차등 작업), README와 분석 갱신 | 캠페인 녹색, README 3단계 상태 갱신 |
+| 1 ([#43](https://github.com/reexec/rex86/issues/43)) | IR, 프런트엔드(결정 3의 첫 범위), IR 평가기, 형태별 차등 단위 테스트 | 첫 범위의 모든 형태가 무작위 상태 차등에서 인터프리터와 일치, 다섯 호스트 CI |
+| 2 ([#44](https://github.com/reexec/rex86/issues/44)) | 번역 실행기: 번역 캐시, 디스패치, 계층화, 탈출, 예산, 게이트, SMC, 테스트용 엔진 설정. 평가기를 백엔드로 끝까지 연결 | 번역 강제 모드에서 기존 단위 테스트, trace 묶음, SST, 견고성 차등이 모든 호스트에서 통과 |
+| 3 ([#45](https://github.com/reexec/rex86/issues/45)) | wasm 백엔드, `WasmModuleServices`, 참조 JS 어댑터, Node 하네스 | wasm32에서 번역 강제 모드 전체 통과, 벤치마크의 첫 기록 |
+| 4 ([#46](https://github.com/reexec/rex86/issues/46)) | 캠페인과 하네스 통합(번역 차등 작업), README와 분석 갱신 | 캠페인 녹색, README 3단계 상태 갱신 |
 | 이후 | 적용 범위 확대(census), 측정으로 고른 최적화 | 하위 이슈마다 측정 |
 
 * 하위 이슈 1과 2는 wasm 없이 끝까지 검증된다. 그래서 wasm 백엔드(3)의 문제를 프런트엔드나 실행기의 문제와 나눠 볼 수 있다.
@@ -197,6 +197,5 @@ sequenceDiagram
 * 블록 최대 길이 64와 문턱 32는 첫값이다. 하위 이슈 2와 3의 측정으로 정한다.
 * 모듈 하나에 모을 블록 수와 설치 지연. 브라우저(특히 모바일 Safari)의 컴파일 시간은 재지 않았다.
 * IR 평가기가 인터프리터보다 빠른지(결정 1의 **추정**).
-* 참조 JS 어댑터의 위치(결정 8, 사용자 결정).
 
-*The maximum block length 64 and the threshold 32 are first values, settled by sub-issues 2 and 3's measurements; how many blocks one module gathers, and the installation delay, with browser compile times (mobile Safari especially) unmeasured; whether the IR evaluator beats the interpreter (decision 1's estimate); the reference JS adapter's place (decision 8, the user's decision).*
+*The maximum block length 64 and the threshold 32 are first values, settled by sub-issues 2 and 3's measurements; how many blocks one module gathers, and the installation delay, with browser compile times (mobile Safari especially) unmeasured; whether the IR evaluator beats the interpreter (decision 1's estimate).*
