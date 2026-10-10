@@ -863,6 +863,7 @@ inline void ExecuteDecoded(StepResult& result, CpuState& state, GuestMemory& mem
             state.Seg(Segment::kCs).selector !=
                 saved_segments[static_cast<std::size_t>(Segment::kCs)].selector)
         {
+            result.branched = true;
             const decode::ControlFlow flow = decoded.Flow();
             const bool branch = flow != decode::ControlFlow::kNone &&
                 flow != decode::ControlFlow::kHalt &&
@@ -1006,9 +1007,15 @@ StepResult Step(CpuState& state, GuestMemory& memory,
     return result;
 }
 
-BlockResult RunBlock(CpuState& state, GuestMemory& memory,
-                     Environment& environment, const Features& features,
-                     DecodeCache* cache, const BlockLimits& limits)
+namespace
+{
+
+// The block loop. The version that stops after a branch is a separate
+// instantiation so that the one serving the interpreter alone compiles to
+// the loop measured in designs #35 and #32.
+template <bool kStopAfterBranch>
+BlockResult RunBlockLoop(CpuState& state, GuestMemory& memory, Environment& environment,
+                         const Features& features, DecodeCache* cache, const BlockLimits& limits)
 {
     BlockResult block;
     StepBudget budget;
@@ -1017,6 +1024,10 @@ BlockResult RunBlock(CpuState& state, GuestMemory& memory,
     block.last.budget = &budget;
     while (true)
     {
+        if constexpr (kStopAfterBranch)
+        {
+            block.last.branched = false;
+        }
         StepOne(block.last, state, memory, environment, features, cache);
         // An instruction that retires counts one step here; a string
         // instruction has added its other iterations, and those a fault, a
@@ -1036,6 +1047,13 @@ BlockResult RunBlock(CpuState& state, GuestMemory& memory,
         {
             break;
         }
+        if constexpr (kStopAfterBranch)
+        {
+            if (block.last.branched)
+            {
+                break;
+            }
+        }
         if (limits.gates != nullptr)
         {
             const SegmentRegister& cs = state.Seg(Segment::kCs);
@@ -1050,6 +1068,17 @@ BlockResult RunBlock(CpuState& state, GuestMemory& memory,
     block.last.budget = nullptr;
     block.steps = budget.used;
     return block;
+}
+
+}  // namespace
+
+BlockResult RunBlock(CpuState& state, GuestMemory& memory,
+                     Environment& environment, const Features& features,
+                     DecodeCache* cache, const BlockLimits& limits)
+{
+    return limits.stop_after_branch
+        ? RunBlockLoop<true>(state, memory, environment, features, cache, limits)
+        : RunBlockLoop<false>(state, memory, environment, features, cache, limits);
 }
 
 bool EnterInterrupt(CpuState& state, GuestMemory& memory,

@@ -14,6 +14,8 @@
 #include <random>
 #include <string>
 
+#include "rex86/cpu.h"
+
 namespace rex86::robust
 {
 
@@ -54,6 +56,10 @@ struct CaseResult
     // A digest of the events, the final state, memory and page attributes,
     // for the determinism check (I6).
     std::uint64_t digest = 0;
+    // The same without what only an engine's bookkeeping changes (the
+    // kTranslated bit and the count of stores into code pages), for the
+    // engine comparison (I8, design #44).
+    std::uint64_t architectural_digest = 0;
     CaseStats stats;
 };
 
@@ -67,22 +73,28 @@ void SetEventHook(EventHook hook);
 
 // Generates and runs one case. code, when given, is copied into guest
 // memory at the initial EIP, so libFuzzer's mutations act on instructions.
-CaseResult RunCase(Random& random, const std::uint8_t* code = nullptr, std::size_t code_size = 0);
+// translation, when given, overrides the Cpu's default engine.
+CaseResult RunCase(Random& random, const std::uint8_t* code = nullptr, std::size_t code_size = 0,
+                   const TranslationOptions* translation = nullptr);
 
-// Runs a case twice from identically built random sources and adds the
-// determinism check. make_random builds a fresh source each call.
+// Runs a case twice on the interpreter from identically built random
+// sources (the determinism check, I6), then once more translating every
+// block with the IR evaluator, whose architectural results must equal the
+// interpreter's (I8, design #44). make_random builds a fresh source each
+// call.
 template <typename MakeRandom>
 CaseResult RunCaseTwice(const MakeRandom& make_random, const std::uint8_t* code = nullptr,
                         const std::size_t code_size = 0)
 {
+    const TranslationOptions interpreter;
     Random first_random = make_random();
-    CaseResult first = RunCase(first_random, code, code_size);
+    CaseResult first = RunCase(first_random, code, code_size, &interpreter);
     if (!first.ok)
     {
         return first;
     }
     Random second_random = make_random();
-    const CaseResult second = RunCase(second_random, code, code_size);
+    const CaseResult second = RunCase(second_random, code, code_size, &interpreter);
     if (!second.ok)
     {
         return second;
@@ -91,6 +103,21 @@ CaseResult RunCaseTwice(const MakeRandom& make_random, const std::uint8_t* code 
     {
         first.ok = false;
         first.failure = "I6: the same case ran differently twice";
+        return first;
+    }
+    TranslationOptions translation;
+    translation.mode = TranslationMode::kEvaluator;
+    translation.threshold = 0;
+    Random third_random = make_random();
+    const CaseResult third = RunCase(third_random, code, code_size, &translation);
+    if (!third.ok)
+    {
+        return third;
+    }
+    if (first.architectural_digest != third.architectural_digest)
+    {
+        first.ok = false;
+        first.failure = "I8: translation and the interpreter ran the same case differently";
     }
     return first;
 }

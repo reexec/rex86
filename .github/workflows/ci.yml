@@ -66,6 +66,24 @@ jobs:
       - name: Test
         run: ctest --preset linux-x64-debug
 
+  # Every Cpu translating every block at its first entry with the IR
+  # evaluator (design #44), under ASan and UBSan with the decode cache always
+  # on: the whole ctest, unit tests, trace corpus and robustness smoke
+  # included, runs through translation.
+  linux-x64-translate:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Configure
+        run: cmake --preset linux-x64-debug -DREX86_WARNINGS_AS_ERRORS=ON -DREX86_SANITIZE=address,undefined -DREX86_DECODE_CACHE_WARMUP=0 -DREX86_FORCE_TRANSLATION=ON
+      - name: Build
+        run: cmake --build --preset linux-x64-debug
+      - name: Test
+        run: ctest --preset linux-x64-debug
+
   # The robustness harness under libFuzzer (design #31, decision 3): Clang
   # with ASan, UBSan and coverage-guided mutation for a fixed minute. A
   # crashing input is kept as an artifact; rex86_robust_libfuzzer <file>

@@ -7,6 +7,7 @@
 #define REX86_TRANSLATE_IR_EVALUATOR_H_
 
 #include <cstdint>
+#include <vector>
 
 #include "rex86/cpu_state.h"
 #include "rex86/guest_memory.h"
@@ -33,6 +34,10 @@ bool AccessWouldSucceed(const CpuState& state, const GuestMemory& memory, Segmen
 
 // Runs the block from its first operation. On return EIP is the exit's.
 ExitResult Evaluate(const Block& block, CpuState& state, GuestMemory& memory);
+// The same with the caller's value buffer, which it resizes as needed, so
+// that a runtime evaluating many blocks allocates once.
+ExitResult Evaluate(const Block& block, CpuState& state, GuestMemory& memory,
+                    std::vector<std::uint32_t>* values);
 
 }  // namespace rex86::translate::ir
 

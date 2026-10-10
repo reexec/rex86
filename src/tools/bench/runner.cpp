@@ -114,7 +114,8 @@ std::uint64_t FrameInstructions(const Board& board, const double ipc)
         std::llround(board.clock_mhz * 1e6 * ipc / kFrameHz));
 }
 
-Machine::Machine(const Image& image, const Workload& workload)
+Machine::Machine(const Image& image, const Workload& workload,
+                 const TranslationOptions* translation)
     : workload_(workload),
       buffer_(kMemoryBytes, 0),
       memory_(buffer_.data(), kMemoryBytes),
@@ -122,6 +123,10 @@ Machine::Machine(const Image& image, const Workload& workload)
 {
     loaded_ = LoadImage(image, &memory_);
     cpu_ = std::make_unique<Cpu>(&memory_, environment_.get(), Features{});
+    if (translation != nullptr)
+    {
+        cpu_->SetTranslation(*translation);
+    }
     cpu_->RegisterGate(workload_.gate);
     ResetLap();
 }
@@ -195,7 +200,7 @@ WorkloadResult RunWorkload(const Image& image, const Workload& workload,
     WorkloadResult result;
     result.name = workload.name;
     const Clock::time_point start = Clock::now();
-    Machine machine(image, workload);
+    Machine machine(image, workload, options.translation);
     if (!machine.loaded())
     {
         result.failure = "the image did not load";
@@ -224,6 +229,8 @@ WorkloadResult RunWorkload(const Image& image, const Workload& workload,
     {
         result.failure = "no lap completed within the frames; raise --budget or --frames";
     }
+    result.engine_bytes = machine.cpu().EngineMemoryBytes();
+    result.translation = machine.cpu().translation_stats();
     return result;
 }
 

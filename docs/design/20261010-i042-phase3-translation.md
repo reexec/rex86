@@ -149,7 +149,7 @@ sequenceDiagram
 | 수단 | 무엇을 | 어디서 |
 |---|---|---|
 | 프런트엔드 단위 테스트 | 형태별로 명령 하나를 IR 평가기와 인터프리터로 실행해 비교, 무작위 상태 | 모든 호스트 |
-| 번역 강제 모드 | 문턱 0으로 모든 블록을 번역해 기존 단위 테스트, trace 묶음, SST를 다시 돌림 | 모든 호스트(평가기), wasm32(wasm 백엔드) |
+| 번역 강제 모드 | 문턱 0으로 모든 블록을 번역해 기존 단위 테스트, trace 묶음, 견고성 smoke를 다시 돌림. SST는 real mode 16비트라 프런트엔드의 모드 밖이고 러너가 `interp::Step`을 불러 제외한다(#44 결정 5, 2026-10-10 갱신) | 모든 호스트(평가기), wasm32(wasm 백엔드) |
 | 견고성 하네스 | 같은 케이스를 인터프리터와 번역 엔진으로 돌려 이벤트, 상태, 메모리 비교(#31 결정 6) | 모든 호스트, libFuzzer |
 | 호스트 대조 fuzz | 번역 엔진으로도 돌려 호스트 CPU와 비교 | x86 Linux |
 | fuzz 캠페인 | 번역 차등 작업 추가(x86-64 평가기, wasm32 Node) | tag push |
@@ -157,7 +157,7 @@ sequenceDiagram
 
 * 번역 강제와 엔진 선택은 테스트용 설정으로 연다(예: `Cpu`의 번역 설정 구조체의 문턱, 백엔드 선택). 공개 계약에 들어가므로 세부 설계에서 이름을 정하고 두 소비자 영향에 적는다.
 
-*Translation must give the interpreter's results, and a difference means the translation is wrong (AGENTS.md architecture rules); the table above lists the instruments: frontend unit tests comparing one instruction per form on the IR evaluator and the interpreter from random states (every host); a forced-translation mode, threshold 0, rerunning the existing unit tests, trace corpora and SST with every block translated (every host with the evaluator, wasm32 with the wasm backend); the robustness harness running each case on the interpreter and the translating engine and comparing events, state and memory (#31 decision 6; every host and libFuzzer); the host-comparison fuzzes also run through the translating engine (x86 Linux); a translation-differential job in the fuzz campaign (x86-64 evaluator, wasm32 Node); the benchmark per engine for MIPS, p99 frame time and time to first frame (Node for wasm, native). Forced translation and engine choice open as test settings (say, the threshold and backend choice in a translation-settings struct on `Cpu`), which enter the public contract, so the detailed design names them and records their consumer impact.*
+*Translation must give the interpreter's results, and a difference means the translation is wrong (AGENTS.md architecture rules); the table above lists the instruments: frontend unit tests comparing one instruction per form on the IR evaluator and the interpreter from random states (every host); a forced-translation mode, threshold 0, rerunning the existing unit tests, trace corpora and robustness smoke with every block translated (SST excluded: it is 16-bit real mode, outside the frontend's modes, and its runner calls `interp::Step`; #44 decision 5, updated 2026-10-10) (every host with the evaluator, wasm32 with the wasm backend); the robustness harness running each case on the interpreter and the translating engine and comparing events, state and memory (#31 decision 6; every host and libFuzzer); the host-comparison fuzzes also run through the translating engine (x86 Linux); a translation-differential job in the fuzz campaign (x86-64 evaluator, wasm32 Node); the benchmark per engine for MIPS, p99 frame time and time to first frame (Node for wasm, native). Forced translation and engine choice open as test settings (say, the threshold and backend choice in a translation-settings struct on `Cpu`), which enter the public contract, so the detailed design names them and records their consumer impact.*
 
 ## 결정 10: 성능의 기대와 측정 / Decision 10: expected performance and measurement
 
@@ -171,14 +171,14 @@ sequenceDiagram
 | 순서 | 하위 이슈 | 완료 조건 |
 |---|---|---|
 | 1 ([#43](https://github.com/reexec/rex86/issues/43)) | IR, 프런트엔드(결정 3의 첫 범위), IR 평가기, 형태별 차등 단위 테스트 | 첫 범위의 모든 형태가 무작위 상태 차등에서 인터프리터와 일치, 다섯 호스트 CI |
-| 2 ([#44](https://github.com/reexec/rex86/issues/44)) | 번역 실행기: 번역 캐시, 디스패치, 계층화, 탈출, 예산, 게이트, SMC, 테스트용 엔진 설정. 평가기를 백엔드로 끝까지 연결 | 번역 강제 모드에서 기존 단위 테스트, trace 묶음, SST, 견고성 차등이 모든 호스트에서 통과 |
+| 2 ([#44](https://github.com/reexec/rex86/issues/44)) | 번역 실행기: 번역 캐시, 디스패치, 계층화, 탈출, 예산, 게이트, SMC, 테스트용 엔진 설정. 평가기를 백엔드로 끝까지 연결 | 번역 강제 모드에서 기존 단위 테스트, trace 묶음, 견고성 차등이 모든 호스트에서 통과 |
 | 3 ([#45](https://github.com/reexec/rex86/issues/45)) | wasm 백엔드, `WasmModuleServices`, 참조 JS 어댑터, Node 하네스 | wasm32에서 번역 강제 모드 전체 통과, 벤치마크의 첫 기록 |
 | 4 ([#46](https://github.com/reexec/rex86/issues/46)) | 캠페인과 하네스 통합(번역 차등 작업), README와 분석 갱신 | 캠페인 녹색, README 3단계 상태 갱신 |
 | 이후 | 적용 범위 확대(census), 측정으로 고른 최적화 | 하위 이슈마다 측정 |
 
 * 하위 이슈 1과 2는 wasm 없이 끝까지 검증된다. 그래서 wasm 백엔드(3)의 문제를 프런트엔드나 실행기의 문제와 나눠 볼 수 있다.
 
-*Sub-issues in order, per the table above: 1, the IR, the frontend (decision 3's first coverage), the IR evaluator and per-form differential unit tests, done when every form of the first coverage matches the interpreter from random states and CI is green on five hosts; 2, the translation runtime (translation cache, dispatch, tiering, exits, budget, gates, SMC, test engine settings) wired end to end with the evaluator as backend, done when forced translation passes the existing unit tests, trace corpora, SST and the robustness differential on every host; 3, the wasm backend, `WasmModuleServices`, the reference JS adapter and a Node harness, done when forced translation passes in full on wasm32 with a first benchmark record; 4, campaign and harness integration (a translation-differential job) and README and analysis updates, done when the campaign is green and README's phase 3 status is updated; later, coverage growth by census and optimizations chosen by measurement. Sub-issues 1 and 2 are verified end to end without wasm, so the wasm backend's (3) problems can be told apart from the frontend's or the runtime's.*
+*Sub-issues in order, per the table above: 1, the IR, the frontend (decision 3's first coverage), the IR evaluator and per-form differential unit tests, done when every form of the first coverage matches the interpreter from random states and CI is green on five hosts; 2, the translation runtime (translation cache, dispatch, tiering, exits, budget, gates, SMC, test engine settings) wired end to end with the evaluator as backend, done when forced translation passes the existing unit tests, trace corpora and the robustness differential on every host; 3, the wasm backend, `WasmModuleServices`, the reference JS adapter and a Node harness, done when forced translation passes in full on wasm32 with a first benchmark record; 4, campaign and harness integration (a translation-differential job) and README and analysis updates, done when the campaign is green and README's phase 3 status is updated; later, coverage growth by census and optimizations chosen by measurement. Sub-issues 1 and 2 are verified end to end without wasm, so the wasm backend's (3) problems can be told apart from the frontend's or the runtime's.*
 
 ## 소비자 영향 / Consumer impact
 

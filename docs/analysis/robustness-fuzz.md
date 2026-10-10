@@ -49,10 +49,17 @@
 
 *Resolved (2026-10-10, #32): a REP string now counts one step per iteration, and the budget, a stop request or a pending interrupt stops it between iterations, so `Run(budget)`'s work is bounded at budget steps whatever the memory size (unit test `rep_budget_test.cpp`). The harness keeps its 1 MiB bound so that per-seed reproduction holds.*
 
+## 3.1 번역 차등 I8 (2026-10-10, #44) / The translation differential I8
+
+**확인됨(AMD Ryzen 5 5600X, Linux, x86-64 GCC Release)**: 케이스마다 인터프리터 실행 둘(I6)에 `{kEvaluator, 0}` 번역 실행 하나를 더하고, 이벤트 열, 최종 상태, 메모리, `kTranslated`를 뺀 페이지 속성을 비교했다. 6 shard × 5만 건(시드 4400000부터) 30만 건에서 위반 0이다. shard 하나가 약 190초 걸렸다. 같은 하네스로 프런트엔드에 AF 결함을 넣으면 3,000건 안에서 I8 위반이 여러 건 나와, 이 차등이 번역 결함을 잡는다는 것을 확인했다. 번역 블록이 인터프리터 탈출 뒤 다음 한 단계를 인터프리터에 맡기지 않게 바꾸면 하네스가 끝나지 않는다. 하네스에는 아직 시간 감시가 없어 이를 위반으로 보고하지 못한다(**미확정** 항목에 더함).
+
+*Confirmed (AMD Ryzen 5 5600X, Linux, x86-64 GCC Release): each case added to its two interpreter runs (I6) one translated run under `{kEvaluator, 0}`, comparing the event sequence, final state, memory and page attributes without `kTranslated`; 300,000 cases in 6 shards of 50,000 (seeds from 4400000) gave zero violations, about 190 s per shard. With an AF defect put into the frontend, the same harness reported several I8 violations within 3,000 cases, so the differential catches translation defects. With translated blocks no longer leaving the next step to the interpreter after an interpreter exit, the harness never ends; it has no watchdog yet to report that as a violation (added to the unresolved items).*
+
 ## 4. 미확정 / Unresolved
 
-* **번역 백엔드**: 없음. 3단계에서 같은 하네스가 차등 비교로 넓힌다.
+* **번역 백엔드**: 평가기는 I8로 비교한다(3.1절). wasm 백엔드는 #45에서 같은 비교에 들어간다.
+* **시간 감시**: 코어가 앞으로 나아가지 못하는 결함(같은 EIP에서 도는 루프)은 위반이 아니라 하네스가 끝나지 않는 것으로 드러난다. 케이스마다 단계 수 상한이나 시간 상한을 두는 일이 남았다.
 * **wasm32와 AArch64에서의 긴 실행**: CI의 smoke(300건)만 돈다. 이 환경에 도구가 없다.
 * **identity 매핑(`base` = null)**: 하네스는 실제 버퍼만 쓴다. null base는 호스트 주소가 곧 게스트 주소라 보호 구역을 둘 수 없다.
 
-*Unresolved: translation backends (none yet; phase 3 extends the harness differentially); long runs on wasm32 and AArch64 (only CI's 300-case smoke runs there, the tools being absent here); the identity mapping (`base` = null), which the harness cannot guard since guest addresses are host addresses.*
+*Unresolved: translation backends (the evaluator is compared by I8, section 3.1; the wasm backend joins the same comparison in #45); a watchdog (a defect that stops the core from advancing, a loop at one EIP, shows as a harness that never ends rather than a violation, and a per-case step or time limit remains to be added); long runs on wasm32 and AArch64 (only CI's 300-case smoke runs there, the tools being absent here); the identity mapping (`base` = null), which the harness cannot guard since guest addresses are host addresses.*

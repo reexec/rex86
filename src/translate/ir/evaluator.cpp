@@ -95,7 +95,18 @@ bool ParityEven(std::uint32_t value)
 
 ExitResult Evaluate(const Block& block, CpuState& state, GuestMemory& memory)
 {
-    std::vector<std::uint32_t> values(block.insts.size(), 0);
+    std::vector<std::uint32_t> values;
+    return Evaluate(block, state, memory, &values);
+}
+
+ExitResult Evaluate(const Block& block, CpuState& state, GuestMemory& memory,
+                    std::vector<std::uint32_t>* buffer)
+{
+    if (buffer->size() < block.insts.size())
+    {
+        buffer->resize(block.insts.size());
+    }
+    std::vector<std::uint32_t>& values = *buffer;
     std::uint32_t current_index = 0;
     std::uint32_t current_eip = block.start_eip;
     const auto exit = [&](const ExitKind kind, const std::uint32_t eip,

@@ -31,6 +31,9 @@ option(REX86_LIBFUZZER "Build rex86_robust_libfuzzer (Clang)" OFF)
 # Instructions a Cpu retires before it makes its decode cache (design #34);
 # 0 sends every test and fuzz through the cache.
 set(REX86_DECODE_CACHE_WARMUP "" CACHE STRING "Override the decode cache warm-up (instructions)")
+# Every Cpu translates every block at its first entry with the IR evaluator,
+# so the whole test suite runs through translation (design #44).
+option(REX86_FORCE_TRANSLATION "Default every Cpu to forced translation" OFF)
 
 if(PROJECT_IS_TOP_LEVEL)
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
@@ -131,6 +134,7 @@ add_library(rex86_core STATIC
     src/translate/ir/evaluator.cpp
     src/translate/ir/frontend.cpp
     src/translate/ir/optimize.cpp
+    src/translate/runtime.cpp
 )
 add_library(rex86::core ALIAS rex86_core)
 target_include_directories(rex86_core PUBLIC
@@ -141,11 +145,20 @@ target_compile_definitions(rex86_core PRIVATE REX86_VERSION="${REX86_VERSION}")
 if(NOT REX86_DECODE_CACHE_WARMUP STREQUAL "")
     target_compile_definitions(rex86_core PRIVATE REX86_DECODE_CACHE_WARMUP=${REX86_DECODE_CACHE_WARMUP})
 endif()
+if(REX86_FORCE_TRANSLATION)
+    target_compile_definitions(rex86_core PRIVATE REX86_FORCE_TRANSLATION=1)
+endif()
 target_link_libraries(rex86_core PRIVATE rex86_warnings rex86_zydis rex86_softfloat)
 
 if(REX86_BUILD_TESTS)
     include(CTest)
     enable_testing()
+    # The test tools run near Emscripten's default 16 MiB heap (the
+    # benchmark alone holds a 4 MiB guest and the decode cache); let it grow,
+    # as a browser consumer does.
+    if(EMSCRIPTEN)
+        add_link_options(-sALLOW_MEMORY_GROWTH=1)
+    endif()
 
     # The trace format and replay (design #22, decision 5): outside the
     # core, on the public contract alone, so it builds on every host.
@@ -210,6 +223,7 @@ if(REX86_BUILD_TESTS)
         tests/unit/block_test.cpp
         tests/unit/rep_budget_test.cpp
         tests/unit/ir_test.cpp
+        tests/unit/translate_runtime_test.cpp
         src/tools/census/census.cpp
         src/tools/sst/moo_reader.cpp
     )

@@ -24,6 +24,9 @@ struct Options
     // Design #27, decision 4: the reference CPUs' sustained IPC is inferred,
     // not measured.
     double ipc = 1.0;
+    // The engine: null keeps the Cpu's default (the interpreter, or forced
+    // translation in a REX86_FORCE_TRANSLATION build).
+    const TranslationOptions* translation = nullptr;
 };
 
 struct WorkloadResult
@@ -42,6 +45,10 @@ struct WorkloadResult
     double first_frame_ms = 0.0;
 
     [[nodiscard]] double Mips() const;
+    // The engines' memory and the translation counts at the end of the run
+    // (goal 7's instrumentation; design #44).
+    std::size_t engine_bytes = 0;
+    TranslationStats translation;
 };
 
 // A frame-time percentile of the result: p in [0, 1], taken at index
@@ -73,9 +80,11 @@ std::uint64_t FrameInstructions(const Board& board, double ipc);
 class Machine
 {
 public:
-    // The interpreter alone today; a translation backend will take a
-    // BenchCodeCache here (design #27, decision 6).
-    Machine(const Image& image, const Workload& workload);
+    // translation, when given, selects the engine (design #44); a native
+    // backend will take a BenchCodeCache here as well (design #27,
+    // decision 6).
+    Machine(const Image& image, const Workload& workload,
+            const TranslationOptions* translation = nullptr);
     ~Machine();
 
     Machine(const Machine&) = delete;

@@ -77,6 +77,10 @@ struct StepResult
     // passes its StepResult to every instruction already; a seventh
     // argument went on the stack and cost the hot loop a few percent.
     StepBudget* budget = nullptr;
+    // Set when the instruction transferred control (EIP is not the
+    // fallthrough, or CS changed). Only the block loop that stops after a
+    // branch clears and reads it (design #44); others leave it stale.
+    bool branched = false;
 };
 
 // Executes one instruction at CS:EIP, a REP string to completion. With a
@@ -119,6 +123,9 @@ struct BlockLimits
     const std::atomic<bool>* attention = nullptr;
     // Null when the Cpu has no gates.
     const GateFilter* gates = nullptr;
+    // Return right after an instruction that transferred control, so that
+    // the Cpu loop sees every block head (design #44: translation on).
+    bool stop_after_branch = false;
 };
 
 struct BlockResult

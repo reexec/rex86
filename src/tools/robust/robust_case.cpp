@@ -494,7 +494,7 @@ private:
 };
 
 CaseResult Execute(Random& random, const int sabotage, const std::uint8_t* code,
-                   const std::size_t code_size)
+                   const std::size_t code_size, const TranslationOptions* translation)
 {
     CaseResult result;
     const std::uint32_t size = PickSize(random);
@@ -527,6 +527,10 @@ CaseResult Execute(Random& random, const int sabotage, const std::uint8_t* code,
 
     RandomEnvironment environment(random, size);
     Cpu cpu(&memory, &environment, RandomFeatures(random));
+    if (translation != nullptr)
+    {
+        cpu.SetTranslation(*translation);
+    }
     RandomizeState(random, &cpu.state(), size, benign);
     if (code != nullptr)
     {
@@ -621,11 +625,17 @@ CaseResult Execute(Random& random, const int sabotage, const std::uint8_t* code,
     }
     h = DigestState(h, cpu.state());
     h = Fnv(h, arena.guest(), size);
+    std::uint64_t architectural = h;
     for (std::uint32_t p = 0; p < memory.pages().page_count(); ++p)
     {
-        h = FnvValue(h, static_cast<std::uint8_t>(memory.pages().Get(p << kGuestPageShift)));
+        const PageFlag flags = memory.pages().Get(p << kGuestPageShift);
+        h = FnvValue(h, static_cast<std::uint8_t>(flags));
+        architectural = FnvValue(
+            architectural, static_cast<std::uint8_t>(static_cast<std::uint8_t>(flags) &
+                                                     ~static_cast<std::uint8_t>(PageFlag::kTranslated)));
     }
     result.digest = FnvValue(h, environment.code_page_writes);
+    result.architectural_digest = architectural;
     return result;
 }
 
@@ -680,14 +690,15 @@ void SetEventHook(const EventHook hook)
     g_event_hook = hook;
 }
 
-CaseResult RunCase(Random& random, const std::uint8_t* code, const std::size_t code_size)
+CaseResult RunCase(Random& random, const std::uint8_t* code, const std::size_t code_size,
+                   const TranslationOptions* translation)
 {
-    return Execute(random, 0, code, code_size);
+    return Execute(random, 0, code, code_size, translation);
 }
 
 CaseResult RunSabotagedCase(Random& random, const int sabotage)
 {
-    return Execute(random, sabotage, nullptr, 0);
+    return Execute(random, sabotage, nullptr, 0, nullptr);
 }
 
 bool FuzzDecoder(Random& random, std::string* failure)

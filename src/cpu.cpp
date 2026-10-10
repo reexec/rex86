@@ -5,6 +5,8 @@
 
 #include "interp/decode_cache.h"
 #include "interp/interpreter.h"
+#include "translate/ir/frontend.h"
+#include "translate/runtime.h"
 
 namespace rex86
 {
@@ -16,6 +18,14 @@ Cpu::Cpu(GuestMemory* memory,
     : memory_(memory), environment_(environment), code_cache_(code_cache), features_(features)
 {
     state_.Reset();
+#if defined(REX86_FORCE_TRANSLATION)
+    // Every Cpu translates every block at its first entry, so that the whole
+    // test suite runs through translation (design #44, decision 4).
+    TranslationOptions forced;
+    forced.mode = TranslationMode::kEvaluator;
+    forced.threshold = 0;
+    SetTranslation(forced);
+#endif
 }
 
 Cpu::~Cpu() = default;
@@ -38,20 +48,48 @@ constexpr std::uint64_t kDecodeCacheWarmup = 64;
 
 Engine Cpu::ActiveEngine() const
 {
-    // The interpreter exists from task #11 on. A translation backend will
-    // answer kTranslator here only when code_cache_ is non-null and the
-    // backend is built.
-    return Engine::kInterpreter;
+    return translator_ ? Engine::kTranslator : Engine::kInterpreter;
+}
+
+void Cpu::SetTranslation(const TranslationOptions& options)
+{
+    translation_ = options;
+    interpret_next_ = false;
+    translation_stats_ = TranslationStats{};
+    switch (options.mode)
+    {
+        case TranslationMode::kOff:
+            translator_.reset();
+            break;
+        case TranslationMode::kEvaluator:
+            translator_ = std::make_unique<translate::Translator>(
+                std::make_unique<translate::EvaluatorBackend>(), options.threshold);
+            break;
+    }
+}
+
+TranslationStats Cpu::translation_stats() const
+{
+    TranslationStats stats = translation_stats_;
+    stats.blocks_translated = translator_ ? translator_->translated_count() : 0;
+    return stats;
 }
 
 std::size_t Cpu::EngineMemoryBytes() const
 {
-    return decode_cache_ ? decode_cache_->FootprintBytes() : 0u;
+    return (decode_cache_ ? decode_cache_->FootprintBytes() : 0u) +
+           (translator_ ? translator_->FootprintBytes() : 0u);
 }
 
 void Cpu::RegisterGate(std::uint32_t linear_address)
 {
     gates_.insert(linear_address);
+    // A gate inside a translated block would run without its check
+    // (design #42, decision 5).
+    if (translator_)
+    {
+        translator_->Flush();
+    }
     if (gate_filter_.empty())
     {
         gate_filter_.assign(interp::GateFilter::kWords, 0);
@@ -215,6 +253,30 @@ Event Cpu::RunUntilStop(std::uint64_t step_budget)
             return event;
         }
 
+        // A translated block at a block head (design #44, decision 1). It
+        // runs only when the budget covers it whole; an exit that leaves an
+        // instruction to the interpreter makes the next step interpreted.
+        const interp::GateFilter filter{gate_filter_.data()};
+        const interp::GateFilter* const gates = gate_filter_.empty() ? nullptr : &filter;
+        if (translator_ && !interpret_next_ && !interrupt_shadow_ && !in_progress_ &&
+            translate::ir::ModesSupported(state_))
+        {
+            const translate::Translation* translation =
+                translator_->Lookup(state_, *memory_, features_, gates);
+            if (translation != nullptr &&
+                translation->block.instruction_count <= step_budget - steps)
+            {
+                const translate::ir::ExitResult exit =
+                    translator_->Run(*translation, state_, *memory_);
+                steps += exit.steps;
+                interpret_next_ = exit.kind == translate::ir::ExitKind::kInterpret;
+                ++translation_stats_.block_runs;
+                translation_stats_.translated_steps += exit.steps;
+                translation_stats_.interpreter_exits += interpret_next_ ? 1u : 0u;
+                continue;
+            }
+        }
+
         // A block runs until something needs this loop again: the budget,
         // the end of the warm-up, attention (a stop request or a pending
         // interrupt), a possible gate, or an instruction that did not simply
@@ -235,8 +297,17 @@ Event Cpu::RunUntilStop(std::uint64_t step_budget)
             }
         }
         limits.attention = &attention_.value();
-        const interp::GateFilter filter{gate_filter_.data()};
-        limits.gates = gate_filter_.empty() ? nullptr : &filter;
+        limits.gates = gates;
+        if (translator_)
+        {
+            // Every block head comes back to the dispatch above.
+            limits.stop_after_branch = true;
+            if (interpret_next_)
+            {
+                limits.max_steps = 1;
+                interpret_next_ = false;
+            }
+        }
         const interp::BlockResult block =
             interp::RunBlock(state_, *memory_, *environment_, features_, decode_cache_.get(), limits);
         steps += block.steps;
