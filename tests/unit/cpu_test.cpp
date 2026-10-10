@@ -66,7 +66,13 @@ void RunCpuTests(rex86::test::Context& context)
 
     // A fresh Cpu holds reset state and runs on the interpreter.
     REX86_CHECK_EQ(context, cpu.state().eflags, rex86::kEflagsReserved1);
-    REX86_CHECK(context, cpu.ActiveEngine() == rex86::Engine::kInterpreter);
+    // A REX86_FORCE_TRANSLATION build starts every Cpu translating.
+    const rex86::Engine expected_engine = cpu.translation().mode == rex86::TranslationMode::kOff
+        ? rex86::Engine::kInterpreter
+        : rex86::Engine::kTranslator;
+    REX86_CHECK(context, cpu.ActiveEngine() == expected_engine);
+    // A forced build's default really turns its engine on in every Cpu.
+    REX86_CHECK(context, cpu.translation().mode == rex86::DefaultTranslation().mode);
     REX86_CHECK(context, cpu.memory() == &memory);
     REX86_CHECK(context, cpu.environment() == &environment);
     REX86_CHECK(context, cpu.code_cache() == nullptr);

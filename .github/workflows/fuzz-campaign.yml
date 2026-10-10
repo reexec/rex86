@@ -76,12 +76,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - warmup: default
+          - variant: warmup-default
             cmake_extra: ''
+            fuzz_extra: ''
             base: 30000000
-          - warmup: '0'
+          - variant: warmup-0
             cmake_extra: -DREX86_DECODE_CACHE_WARMUP=0
+            fuzz_extra: ''
             base: 40000000
+          # The core side replayed through translation, one instruction per
+          # block, against the same host CPU (design #46).
+          - variant: translate
+            cmake_extra: ''
+            fuzz_extra: --translate
+            base: 95000000
     steps:
       - uses: actions/checkout@v7
       - name: Install build dependencies
@@ -94,14 +102,15 @@ jobs:
       - name: Fuzz
         run: |
           cases=$([ "${{ needs.plan.outputs.scale }}" = full ] && echo 5000000 || echo 20000)
-          scripts/fuzz_campaign.sh run int-i386-warmup-${{ matrix.warmup }} 4 "$cases" \
+          scripts/fuzz_campaign.sh run int-i386-${{ matrix.variant }} 4 "$cases" \
             $(( ${{ matrix.base }} + ${{ needs.plan.outputs.offset }} )) 1 -- \
-            build/i386/bin/rex86_int_fuzz {CASES} {SEED} --failures "$CAMPAIGN_LOG_DIR/int-{SHARD}.rxt"
+            build/i386/bin/rex86_int_fuzz {CASES} {SEED} ${{ matrix.fuzz_extra }} \
+            --failures "$CAMPAIGN_LOG_DIR/int-{SHARD}.rxt"
       - name: Keep logs and failing cases
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: campaign-int-i386-warmup-${{ matrix.warmup }}
+          name: campaign-int-i386-${{ matrix.variant }}
           path: campaign-logs/
 
   x87-simd:
@@ -242,6 +251,72 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: campaign-libfuzzer
+          path: campaign-logs/
+
+  # The IR differential (design #43): random instructions and blocks through
+  # the frontend and the IR evaluator against the interpreter.
+  irdiff-x64:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Build
+        run: |
+          cmake -S . -B build/x64 -G Ninja -DCMAKE_BUILD_TYPE=Release -DREX86_WARNINGS_AS_ERRORS=ON
+          cmake --build build/x64 --target rex86_irdiff
+      - name: Differential
+        run: |
+          cases=$([ "${{ needs.plan.outputs.scale }}" = full ] && echo 5000000 || echo 20000)
+          scripts/fuzz_campaign.sh run irdiff-x64 4 "$cases" $(( 80000000 + ${{ needs.plan.outputs.offset }} )) 1 -- \
+            build/x64/bin/rex86_irdiff --cases {CASES} --seed {SEED}
+      - name: Keep logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: campaign-irdiff-x64
+          path: campaign-logs/
+
+  # The wasm backend (design #45) on Node: the IR differential runs every
+  # block through generated modules too, and the robustness harness's I8
+  # compares a build whose every Cpu translates with wasm.
+  wasm-translate:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: mymindstorm/setup-emsdk@v16
+        with:
+          version: 3.1.74
+          actions-cache-folder: emsdk-cache
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Build
+        run: |
+          emcmake cmake -S . -B build/wasm -G Ninja -DCMAKE_BUILD_TYPE=Release -DREX86_WARNINGS_AS_ERRORS=ON
+          cmake --build build/wasm --target rex86_irdiff
+          emcmake cmake -S . -B build/wasm-forced -G Ninja -DCMAKE_BUILD_TYPE=Release -DREX86_WARNINGS_AS_ERRORS=ON \
+            -DREX86_FORCE_TRANSLATION=WASM
+          cmake --build build/wasm-forced --target rex86_robust
+      - name: IR differential through wasm
+        run: |
+          cases=$([ "${{ needs.plan.outputs.scale }}" = full ] && echo 500000 || echo 5000)
+          scripts/fuzz_campaign.sh run irdiff-wasm 4 "$cases" $(( 90000000 + ${{ needs.plan.outputs.offset }} )) 1 -- \
+            node build/wasm/bin/rex86_irdiff.js --cases {CASES} --seed {SEED}
+      - name: Robustness through wasm
+        if: success() || failure()
+        run: |
+          cases=$([ "${{ needs.plan.outputs.scale }}" = full ] && echo 50000 || echo 100)
+          scripts/fuzz_campaign.sh run robust-wasm 4 "$cases" $(( 85000000 + ${{ needs.plan.outputs.offset }} )) "$cases" -- \
+            node build/wasm-forced/bin/rex86_robust.js --cases {CASES} --seed {SEED}
+      - name: Keep logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: campaign-wasm-translate
           path: campaign-logs/
 
   # The same invariants on an AArch64 host.

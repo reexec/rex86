@@ -25,6 +25,57 @@ namespace interp
 class DecodeCache;
 }
 
+namespace translate
+{
+class Translator;
+}
+
+// Translation of guest blocks (design #44). Off by default: the interpreter
+// alone runs, as before.
+enum class TranslationMode : std::uint8_t
+{
+    kOff,
+    // The portable IR evaluator, for verification: it runs translated
+    // blocks without a code cache on every host, and is not meant to be
+    // faster than the interpreter.
+    kEvaluator,
+    // wasm modules installed through TranslationOptions::wasm (design #45);
+    // wasm32 builds only.
+    kWasm,
+};
+
+struct TranslationOptions
+{
+    TranslationMode mode = TranslationMode::kOff;
+    // Entries into a block head before the block is translated; 0
+    // translates a block at its first entry (forced translation, for tests).
+    std::uint32_t threshold = 32;
+    // For kWasm: the host's module installer.
+    WasmModuleServices* wasm = nullptr;
+    // The longest block, in instructions. A block runs only when the budget
+    // covers it whole, so 1 lets single steps run translated (design #46).
+    std::uint32_t max_block_instructions = 64;
+};
+
+// The translation every Cpu made afterwards starts with (process-wide), so
+// that one call turns translation on everywhere; a host does it before
+// making its Cpus. Forced-translation test builds use it (design #45).
+void SetDefaultTranslation(const TranslationOptions& options);
+[[nodiscard]] const TranslationOptions& DefaultTranslation();
+
+// Counts since translation was last turned on, for diagnostics and the
+// benchmark.
+struct TranslationStats
+{
+    std::uint64_t blocks_translated = 0;
+    // Translated blocks run, and those that left an instruction to the
+    // interpreter (a failed check, an uncovered instruction).
+    std::uint64_t block_runs = 0;
+    std::uint64_t interpreter_exits = 0;
+    // Guest steps run inside translated blocks.
+    std::uint64_t translated_steps = 0;
+};
+
 enum class Engine : std::uint8_t
 {
     // No engine is available in this build (task #1).
@@ -79,8 +130,24 @@ public:
         return features_;
     }
 
-    // Which engine Run would use. kNone until an engine exists.
+    // Which engine Run would use: kTranslator while translation is on.
     [[nodiscard]] Engine ActiveEngine() const;
+
+    // Turns translation on or off, dropping every translation made so far.
+    // Returns false, leaving translation off, when the mode cannot run here
+    // (kWasm outside a wasm32 build, or without WasmModuleServices). A build
+    // with REX86_FORCE_TRANSLATION starts every Cpu with {kEvaluator, 0}.
+    bool SetTranslation(const TranslationOptions& options);
+    // An asynchronous WasmModuleServices answering an Install that returned
+    // kPending.
+    void CompleteWasmModule(std::uint32_t ticket, const std::uint32_t* table_indices,
+                            std::uint32_t count);
+    void FailWasmModule(std::uint32_t ticket);
+    [[nodiscard]] const TranslationOptions& translation() const
+    {
+        return translation_;
+    }
+    [[nodiscard]] TranslationStats translation_stats() const;
 
     // Bytes the engines hold beyond the Cpu itself: today the interpreter's
     // decode cache, made after a short warm-up (design #34); the
@@ -179,6 +246,12 @@ private:
     // The interpreter's decode cache, made once the Cpu has retired
     // kDecodeCacheWarmup instructions so short-lived Cpus never pay for it.
     std::unique_ptr<interp::DecodeCache> decode_cache_;
+    TranslationOptions translation_;
+    // Present while translation is on (design #44).
+    std::unique_ptr<translate::Translator> translator_;
+    // A translated block left its next instruction to the interpreter.
+    bool interpret_next_ = false;
+    TranslationStats translation_stats_;
     std::uint64_t steps_total_ = 0;
     // A REP string stopped between iterations at this linear address
     // (design #32); its gate was checked when it started.

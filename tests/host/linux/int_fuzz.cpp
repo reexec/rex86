@@ -19,10 +19,11 @@
 // (src/trace/), and trace::Replay runs it on the core, so the fuzz and the
 // committed corpus compare through the same code.
 //
-// Usage: rex86_int_fuzz [iterations] [seed] [--verbose] [--stats]
+// Usage: rex86_int_fuzz [iterations] [seed] [--verbose] [--stats] [--translate]
 //                       [--only MNEMONIC] [--record FILE] [--failures FILE]
 // --record writes every case but vendor deviations (the corpus), --failures
-// the mismatches only;
+// the mismatches only; --translate replays the core side through
+// translation, each instruction its own block (design #46);
 // rex86_trace --dump N FILE spells a recorded case out.
 
 #if !defined(__linux__) || !defined(__i386__)
@@ -47,6 +48,7 @@
 #include <vector>
 
 #include "decode/decoder.h"
+#include "rex86/cpu.h"
 #include "rex86/environment.h"
 #include "rex86/guest_memory.h"
 #include "trace/replay.h"
@@ -1169,6 +1171,7 @@ int main(int argc, char** argv)
     std::uint64_t seed = 1;
     bool verbose = false;
     bool stats = false;
+    bool translate = false;
     std::string only;
     std::string record_path;
     std::string failures_path;
@@ -1178,6 +1181,10 @@ int main(int argc, char** argv)
         if (std::strcmp(argv[i], "--verbose") == 0)
         {
             verbose = true;
+        }
+        else if (std::strcmp(argv[i], "--translate") == 0)
+        {
+            translate = true;
         }
         else if (std::strcmp(argv[i], "--stats") == 0)
         {
@@ -1217,6 +1224,16 @@ int main(int argc, char** argv)
             std::fprintf(stderr, "no form named %s\n", only.c_str());
             return 2;
         }
+    }
+    if (translate)
+    {
+        // Every Cpu the replay makes translates each instruction as its own
+        // block with the IR evaluator, so single steps run translated.
+        rex86::TranslationOptions options;
+        options.mode = rex86::TranslationMode::kEvaluator;
+        options.threshold = 0;
+        options.max_block_instructions = 1;
+        rex86::SetDefaultTranslation(options);
     }
     trace::Writer record;
     trace::Writer failures;

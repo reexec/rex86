@@ -31,6 +31,14 @@ option(REX86_LIBFUZZER "Build rex86_robust_libfuzzer (Clang)" OFF)
 # Instructions a Cpu retires before it makes its decode cache (design #34);
 # 0 sends every test and fuzz through the cache.
 set(REX86_DECODE_CACHE_WARMUP "" CACHE STRING "Override the decode cache warm-up (instructions)")
+# Every Cpu translates every block at its first entry, so the whole test
+# suite runs through translation: ON with the IR evaluator (design #44),
+# WASM with the wasm backend under Emscripten (design #45).
+set(REX86_FORCE_TRANSLATION "OFF" CACHE STRING "Forced translation for every Cpu: OFF, ON (IR evaluator) or WASM")
+string(TOUPPER "${REX86_FORCE_TRANSLATION}" REX86_FORCE_TRANSLATION_MODE)
+if(REX86_FORCE_TRANSLATION_MODE STREQUAL "WASM" AND NOT EMSCRIPTEN)
+    message(FATAL_ERROR "REX86_FORCE_TRANSLATION=WASM needs an Emscripten build")
+endif()
 
 if(PROJECT_IS_TOP_LEVEL)
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
@@ -127,6 +135,14 @@ add_library(rex86_core STATIC
     src/interp/x87_stack.cpp
     src/interp/interpreter.cpp
     src/interp/decode_cache.cpp
+    src/translate/ir/ir.cpp
+    src/translate/ir/evaluator.cpp
+    src/translate/ir/frontend.cpp
+    src/translate/ir/optimize.cpp
+    src/translate/runtime.cpp
+    src/translate/wasm/module_writer.cpp
+    src/translate/wasm/codegen.cpp
+    src/translate/wasm/backend.cpp
 )
 add_library(rex86::core ALIAS rex86_core)
 target_include_directories(rex86_core PUBLIC
@@ -137,11 +153,33 @@ target_compile_definitions(rex86_core PRIVATE REX86_VERSION="${REX86_VERSION}")
 if(NOT REX86_DECODE_CACHE_WARMUP STREQUAL "")
     target_compile_definitions(rex86_core PRIVATE REX86_DECODE_CACHE_WARMUP=${REX86_DECODE_CACHE_WARMUP})
 endif()
+if(REX86_FORCE_TRANSLATION_MODE STREQUAL "ON" OR REX86_FORCE_TRANSLATION_MODE STREQUAL "EVALUATOR")
+    target_compile_definitions(rex86_core PRIVATE REX86_FORCE_TRANSLATION=1)
+endif()
 target_link_libraries(rex86_core PRIVATE rex86_warnings rex86_zydis rex86_softfloat)
+
+# The web host's adapter (design #45): a WasmModuleServices that installs
+# generated modules from JavaScript. Consumers' Worker builds link it.
+if(EMSCRIPTEN)
+    add_library(rex86_host_web STATIC src/host/web/wasm_module_services.cpp)
+    target_include_directories(rex86_host_web PUBLIC src)
+    target_link_libraries(rex86_host_web PUBLIC rex86::core PRIVATE rex86_warnings)
+    target_link_options(rex86_host_web INTERFACE
+        "SHELL:--js-library ${CMAKE_CURRENT_SOURCE_DIR}/src/host/web/rex86_wasm_host.js"
+        -sALLOW_TABLE_GROWTH=1)
+    set_property(TARGET rex86_host_web APPEND PROPERTY INTERFACE_LINK_DEPENDS
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/host/web/rex86_wasm_host.js)
+endif()
 
 if(REX86_BUILD_TESTS)
     include(CTest)
     enable_testing()
+    # The test tools run near Emscripten's default 16 MiB heap (the
+    # benchmark alone holds a 4 MiB guest and the decode cache); let it grow,
+    # as a browser consumer does.
+    if(EMSCRIPTEN)
+        add_link_options(-sALLOW_MEMORY_GROWTH=1)
+    endif()
 
     # The trace format and replay (design #22, decision 5): outside the
     # core, on the public contract alone, so it builds on every host.
@@ -177,6 +215,12 @@ if(REX86_BUILD_TESTS)
     target_include_directories(rex86_robust_lib PUBLIC src)
     target_link_libraries(rex86_robust_lib PUBLIC rex86::core rex86_zydis PRIVATE rex86_warnings)
 
+    # The IR differential (design #43): shared by the unit tests and the
+    # long-run tool, portable to every host.
+    add_library(rex86_irdiff_lib STATIC src/tools/irdiff/irdiff.cpp)
+    target_include_directories(rex86_irdiff_lib PUBLIC src)
+    target_link_libraries(rex86_irdiff_lib PUBLIC rex86::core rex86_zydis PRIVATE rex86_warnings)
+
     add_executable(rex86_unit_tests
         tests/unit/main.cpp
         tests/unit/version_test.cpp
@@ -199,6 +243,9 @@ if(REX86_BUILD_TESTS)
         tests/unit/decode_cache_test.cpp
         tests/unit/block_test.cpp
         tests/unit/rep_budget_test.cpp
+        tests/unit/ir_test.cpp
+        tests/unit/translate_runtime_test.cpp
+        tests/unit/wasm_backend_test.cpp
         src/tools/census/census.cpp
         src/tools/sst/moo_reader.cpp
     )
@@ -208,8 +255,8 @@ if(REX86_BUILD_TESTS)
     # SoftFloat's include paths).
     target_include_directories(rex86_unit_tests PRIVATE src)
     target_link_libraries(rex86_unit_tests
-        PRIVATE rex86::core rex86_trace_format rex86_bench_lib rex86_robust_lib rex86_warnings
-                rex86_zydis rex86_softfloat)
+        PRIVATE rex86::core rex86_trace_format rex86_bench_lib rex86_robust_lib rex86_irdiff_lib
+                rex86_warnings rex86_zydis rex86_softfloat)
 
     add_executable(rex86_probe src/tools/probe/main.cpp)
     target_link_libraries(rex86_probe PRIVATE rex86::core rex86_warnings)
@@ -233,6 +280,9 @@ if(REX86_BUILD_TESTS)
     if(EMSCRIPTEN)
         target_link_options(rex86_bench PRIVATE -sNODERAWFS=1)
     endif()
+
+    add_executable(rex86_irdiff src/tools/irdiff/main.cpp)
+    target_link_libraries(rex86_irdiff PRIVATE rex86_irdiff_lib rex86_warnings)
 
     add_executable(rex86_robust src/tools/robust/main.cpp)
     target_link_libraries(rex86_robust PRIVATE rex86_robust_lib rex86_warnings)
@@ -305,6 +355,23 @@ if(REX86_BUILD_TESTS)
         endif()
     endif()
 
+    # Under Emscripten the tools that exercise the wasm backend link the web
+    # adapter; a REX86_FORCE_TRANSLATION=WASM build also links every tool with
+    # the initializer that makes wasm translation every Cpu's default.
+    if(EMSCRIPTEN)
+        foreach(tool rex86_unit_tests rex86_irdiff rex86_bench)
+            target_link_libraries(${tool} PRIVATE rex86_host_web)
+            target_compile_definitions(${tool} PRIVATE REX86_HOST_WEB=1)
+        endforeach()
+        if(REX86_FORCE_TRANSLATION_MODE STREQUAL "WASM")
+            add_library(rex86_force_wasm OBJECT src/host/web/force_wasm.cpp)
+            target_link_libraries(rex86_force_wasm PRIVATE rex86_host_web rex86_warnings)
+            foreach(tool rex86_unit_tests rex86_probe rex86_trace rex86_bench rex86_robust rex86_irdiff)
+                target_link_libraries(${tool} PRIVATE rex86_force_wasm rex86_host_web)
+            endforeach()
+        endif()
+    endif()
+
     # Under Emscripten an executable is a .js loader plus a .wasm module, and
     # CTest runs it through Node.
     if(EMSCRIPTEN)
@@ -312,6 +379,7 @@ if(REX86_BUILD_TESTS)
         add_test(NAME rex86_probe COMMAND node $<TARGET_FILE:rex86_probe>)
         add_test(NAME rex86_bench_smoke COMMAND node $<TARGET_FILE:rex86_bench> --smoke)
         add_test(NAME rex86_robust_smoke COMMAND node $<TARGET_FILE:rex86_robust> --cases 300)
+        add_test(NAME rex86_irdiff_smoke COMMAND node $<TARGET_FILE:rex86_irdiff> --cases 20000)
         if(REX86_TRACE_CORPUS)
             add_test(NAME rex86_trace_corpus
                 COMMAND node $<TARGET_FILE:rex86_trace> ${REX86_TRACE_CORPUS})
@@ -321,6 +389,7 @@ if(REX86_BUILD_TESTS)
         add_test(NAME rex86_probe COMMAND rex86_probe)
         add_test(NAME rex86_bench_smoke COMMAND rex86_bench --smoke)
         add_test(NAME rex86_robust_smoke COMMAND rex86_robust --cases 300)
+        add_test(NAME rex86_irdiff_smoke COMMAND rex86_irdiff --cases 20000)
         if(REX86_TRACE_CORPUS)
             add_test(NAME rex86_trace_corpus COMMAND rex86_trace ${REX86_TRACE_CORPUS})
         endif()

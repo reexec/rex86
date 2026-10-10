@@ -26,6 +26,9 @@ int main()
     RunDecodeCacheTests(context);
     RunBlockTests(context);
     RunRepBudgetTests(context);
+    RunIrTests(context);
+    RunTranslateRuntimeTests(context);
+    RunWasmBackendTests(context);
 
     std::printf("[rex86-unit-tests] checks=%d failures=%d\n", context.checks, context.failures);
     return context.failures == 0 ? 0 : 1;

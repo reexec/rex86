@@ -192,6 +192,37 @@ public:
     virtual void EndWrite(void* memory, std::size_t bytes) = 0;
 };
 
+// How a host answered WasmModuleServices::Install.
+enum class WasmInstall : std::uint8_t
+{
+    kInstalled,  // table_indices holds the exports' indices now
+    kPending,    // answered later through Cpu::CompleteWasmModule or FailWasmModule
+    kFailed,     // the module will never run
+};
+
+// Hands generated wasm modules to the host (design #45), because only the
+// embedding JavaScript can compile and instantiate a module: wasm has no
+// executable memory, so CodeCacheServices does not apply. Only wasm32
+// builds use it; src/host/web/ holds a reference implementation.
+class WasmModuleServices
+{
+public:
+    virtual ~WasmModuleServices() = default;
+
+    // Compiles and instantiates the module against the core's own memory
+    // (import env.memory) and indirect function table (import env.table),
+    // and adds its function exports, in order, to that table. On
+    // kInstalled, table_indices[0 .. export_count) hold their indices. On
+    // kPending the host answers later, on the thread that runs the Cpu and
+    // outside Run, through Cpu::CompleteWasmModule or Cpu::FailWasmModule
+    // with this ticket; the bytes stay valid until then.
+    virtual WasmInstall Install(std::uint32_t ticket, const std::uint8_t* bytes, std::size_t size,
+                                std::uint32_t export_count, std::uint32_t* table_indices) = 0;
+
+    // The core will not call these table entries again.
+    virtual void Release(const std::uint32_t* table_indices, std::uint32_t count) = 0;
+};
+
 }  // namespace rex86
 
 #endif  // REX86_ENVIRONMENT_H_

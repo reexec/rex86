@@ -195,7 +195,7 @@ If the requirement is a simple question or confirmation request, answer it direc
 ## 구현 규칙
 
 * 코어 라이브러리(`include/rex86/`, `src/`)는 호스트 OS 헤더를 포함하지 않는다. `<windows.h>`, `<unistd.h>`, `<sys/mman.h>`, `<emscripten.h>`는 코어에 등장하지 않는다. 코어가 OS에서 필요한 것(코드 캐시 메모리, 시계)은 소비자가 구현하는 콜백 인터페이스로 받는다.
-* 호스트 OS나 호스트 CPU에 의존하는 코드는 `tests/host/<os>/`(호스트 CPU 대조 fuzz)와 `src/tools/<도구>/`의 호스트 전용 파일에만 둔다. 그런 파일은 첫머리에서 `#error`로 자기 호스트를 확인한다.
+* 호스트 OS나 호스트 CPU에 의존하는 코드는 `tests/host/<os>/`(호스트 CPU 대조 fuzz), `src/tools/<도구>/`의 호스트 전용 파일, `src/host/<호스트>/`(소비자가 가져다 쓰는 호스트 어댑터. 예: `src/host/web/`의 `WasmModuleServices` 구현, #45)에만 둔다. 그런 파일은 첫머리에서 `#error`로 자기 호스트를 확인한다. `src/host/`는 코어 라이브러리(`rex86_core`)에 들어가지 않고 별도 타깃으로 빌드한다.
 * 실행 엔진은 디렉터리로 나눈다. `src/interp/`(인터프리터), `src/translate/ir/`(x86 블록을 IR로 올리는 프런트엔드), `src/translate/wasm/`, `src/translate/aarch64/`(백엔드). x86 명령의 의미는 인터프리터와 IR 프런트엔드에만 있고, 백엔드는 IR만 안다. 백엔드에 x86 의미를 다시 쓰지 않는다.
 * 코어는 게스트 형식, OS, 그래픽 API, 자산, 특정 게임을 모른다. 소비자 한쪽의 사정이 코어에 들어와야 하면 기능 플래그(`Features`)나 콜백의 기본값으로 표현하고, 그 사정이 무엇인지 설계에 적는다.
 * 성립하지 않는 기능은 조용히 성공하는 더미로 두지 않는다. 거짓이나 명시적 상태(`kNoEngine` 같은 열거값)를 돌려주고 이유를 한 번 보고한다.
@@ -213,7 +213,7 @@ If the requirement is a simple question or confirmation request, answer it direc
 ## Implementation Rules
 
 * The core library (`include/rex86/`, `src/`) includes no host OS header. `<windows.h>`, `<unistd.h>`, `<sys/mman.h>` and `<emscripten.h>` do not appear in the core. What the core needs from the OS (code-cache memory, clocks) arrives through callback interfaces the consumer implements.
-* Code that depends on the host OS or the host CPU lives only in `tests/host/<os>/` (the host-CPU comparison fuzz) and in host-specific files under `src/tools/<tool>/`. Such a file checks its own host with `#error` at the top.
+* Code that depends on the host OS or the host CPU lives only in `tests/host/<os>/` (the host-CPU comparison fuzz), in host-specific files under `src/tools/<tool>/`, and in `src/host/<host>/` (host adapters consumers take, such as the `WasmModuleServices` implementation in `src/host/web/`, #45). Such a file checks its own host with `#error` at the top. `src/host/` stays out of the core library (`rex86_core`) and builds as separate targets.
 * Execution engines are split by directory: `src/interp/` (the interpreter), `src/translate/ir/` (the frontend lifting x86 blocks to IR), `src/translate/wasm/` and `src/translate/aarch64/` (backends). The meaning of x86 instructions exists only in the interpreter and the IR frontend; a backend knows IR alone. Never reimplement x86 semantics in a backend.
 * The core knows no guest format, OS, graphics API, asset or particular game. When one consumer's circumstance must enter the core, express it as a feature flag (`Features`) or a callback default, and record in the design what that circumstance is.
 * A capability that does not hold is never a quietly succeeding dummy. Return false or an explicit state (an enumerator such as `kNoEngine`) and report the reason once.
@@ -278,6 +278,7 @@ If the requirement is a simple question or confirmation request, answer it direc
 
 * 사용자가 작업을 요청하면 먼저 현재 Git 브랜치명을 확인한다.
 * 현재 브랜치가 `main`이면 작업용 브랜치를 새로 만든 뒤 작업한다. 브랜치 이름은 `work/iNNN-slug`로 하고 `NNN`은 이슈 번호다(예: `work/i001-repository-and-public-contract`).
+* 새 브랜치는 현재 브랜치가 `main`일 때만 만든다. 현재 브랜치가 작업 브랜치이면 새 이슈의 작업이라도 그 브랜치에서 이어서 작업하고, 브랜치 이름은 바꾸지 않는다. 그 브랜치를 머지할 때 PR 본문에는 브랜치에 쌓인 이슈를 모두 `Closes #N`으로 적는다.
 * 작업 단위가 하나 끝날 때마다 관련 변경을 Git 커밋으로 남긴다. `main`에 직접 커밋하지 않는다.
 * CI(`.github/workflows/ci.yml`)는 모든 브랜치 push에서 모든 타깃을 검증한다. 같은 저장소 브랜치에서 연 PR은 push 실행의 결과를 쓰고, fork에서 온 PR만 `pull_request`로 다시 돈다. 같은 브랜치에 새 push가 오면 앞선 실행을 취소하되 `main`은 커밋마다 결과를 남긴다.
 * 프로젝트 버전은 저장소 루트의 `VERSION` 파일에서 `major.minor.patch` 형식으로 관리한다. 사용자가 머지를 요청하면 patch를 1 올리고, minor 올림 요청이면 minor를 1 올리고 patch를 0으로, major 올림 요청이면 major를 1 올리고 minor와 patch를 0으로 한다.
@@ -298,6 +299,7 @@ If the requirement is a simple question or confirmation request, answer it direc
 
 * When the user requests work, first check the current Git branch name.
 * If the current branch is `main`, create a task branch before making changes. Name it `work/iNNN-slug`, where `NNN` is the issue number (for example `work/i001-repository-and-public-contract`).
+* Create a new branch only when the current branch is `main`. On a task branch, keep working on it even for a new issue's work, without renaming it; when it is merged, the PR body names every issue stacked on it as `Closes #N`.
 * Leave a Git commit for the related changes whenever one task unit is complete. Never commit to `main` directly.
 * CI (`.github/workflows/ci.yml`) checks every target on every branch push. A PR from a branch of this repository uses the push run's results; only a PR from a fork runs again on `pull_request`. A newer push to the same branch cancels the earlier run, except on `main`, where every commit keeps its result.
 * Manage the project version in the repository-root `VERSION` file using `major.minor.patch`. On a merge request, raise the patch by 1; on a minor-bump request, raise the minor by 1 and reset the patch to 0; on a major-bump request, raise the major by 1 and reset the minor and patch to 0.

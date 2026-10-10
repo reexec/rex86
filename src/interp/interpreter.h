@@ -14,10 +14,29 @@
 #include "rex86/environment.h"
 #include "rex86/guest_memory.h"
 
+namespace rex86::decode
+{
+struct DecodedInstruction;
+}
+
 namespace rex86::interp
 {
 
 class DecodeCache;
+
+// The longest IA-32 instruction.
+inline constexpr unsigned kFetchWindow = 15;
+
+// True when the instruction's feature is enabled; a disabled feature's
+// instruction raises #UD. The translation frontend asks the same question
+// before lowering an instruction (design #43).
+bool FeatureEnabled(const decode::DecodedInstruction& decoded, const Features& features);
+
+// Fetches up to kFetchWindow bytes at CS:EIP as the interpreter does,
+// stopping at the CS limit (*stopped_at_limit) or the first byte not
+// mapped readable and executable; returns the count fetched.
+unsigned Fetch(const CpuState& state, const GuestMemory& memory, std::uint8_t* bytes,
+               bool* stopped_at_limit);
 
 enum class StepStatus : std::uint8_t
 {
@@ -58,6 +77,10 @@ struct StepResult
     // passes its StepResult to every instruction already; a seventh
     // argument went on the stack and cost the hot loop a few percent.
     StepBudget* budget = nullptr;
+    // Set when the instruction transferred control (EIP is not the
+    // fallthrough, or CS changed). Only the block loop that stops after a
+    // branch clears and reads it (design #44); others leave it stale.
+    bool branched = false;
 };
 
 // Executes one instruction at CS:EIP, a REP string to completion. With a
@@ -100,6 +123,9 @@ struct BlockLimits
     const std::atomic<bool>* attention = nullptr;
     // Null when the Cpu has no gates.
     const GateFilter* gates = nullptr;
+    // Return right after an instruction that transferred control, so that
+    // the Cpu loop sees every block head (design #44: translation on).
+    bool stop_after_branch = false;
 };
 
 struct BlockResult

@@ -23,17 +23,19 @@
 | 작업 | 내용 | 전체 규모 |
 |---|---|---|
 | `plan` | 규모와 시드 오프셋 결정 | |
-| `int-i386` (예열 기본값, 0) | 정수 호스트 대조, `-m32` Release | 각 2,000만 |
+| `int-i386` (예열 기본값, 0, 번역) | 정수 호스트 대조, `-m32` Release. `translate` 행은 코어 쪽을 번역으로 재생(`--translate`, #46) | 각 2,000만 |
 | `x87-simd` | x87 x86-64, SIMD x86-64와 i386 | 1억, 1억, 2,000만 |
 | `robust-release` | 견고성 하네스 x86-64 Release | 100만 |
 | `robust-asan` | 견고성 하네스 GCC ASan/UBSan, 예열 0 | 10만 |
 | `libfuzzer` | 그 구성의 ctest 전체, 다음으로 libFuzzer `-fork=4` | 30분 |
+| `irdiff-x64` | IR 차등(#43): 프런트엔드와 평가기 대 인터프리터, x86-64 Release | 4 × 500만 |
+| `wasm-translate` | wasm32 Node: IR 차등에 wasm 백엔드를 더함(#45), 번역 강제 `WASM` 빌드의 견고성(I8이 wasm과 비교) | 4 × 50만, 4 × 5만 |
 | `robust-arm64` | 견고성 하네스 AArch64 Release | 50만 |
 | `sst` | SingleStepTests/80386 real mode `--execute` | 941 파일 |
 
 규모는 첫 실행의 실제 시간으로 고칩니다([설계](../design/20261010-i037-tag-fuzz-campaign.md) 결정 2). 바뀐 값은 워크플로가 기준입니다.
 
-*Jobs: `plan` decides the scale and seed offset; `int-i386` (default warm-up and 0), the integer host comparison in a `-m32` Release build, 20M each; `x87-simd`, x87 on x86-64 and SIMD on x86-64 and i386, 100M, 100M and 20M; `robust-release`, the robustness harness in x86-64 Release, 1M; `robust-asan`, under GCC ASan/UBSan at warm-up 0, 100,000; `libfuzzer`, the whole ctest in its configuration, then libFuzzer with `-fork=4`, 30 minutes; `robust-arm64`, the robustness harness in AArch64 Release, 500,000; `sst`, SingleStepTests/80386 real mode `--execute`, 941 files. The scales are corrected from the first run's real times (design decision 2); the workflow holds the current values.*
+*Jobs: `plan` decides the scale and seed offset; `int-i386` (default warm-up, 0, and translate), the integer host comparison in a `-m32` Release build, its translate row replaying the core side through translation (`--translate`, #46), 20M each; `x87-simd`, x87 on x86-64 and SIMD on x86-64 and i386, 100M, 100M and 20M; `robust-release`, the robustness harness in x86-64 Release, 1M; `robust-asan`, under GCC ASan/UBSan at warm-up 0, 100,000; `libfuzzer`, the whole ctest in its configuration, then libFuzzer with `-fork=4`, 30 minutes; `irdiff-x64`, the IR differential (#43) of the frontend and evaluator against the interpreter in x86-64 Release, 4 × 5M; `wasm-translate` on wasm32 Node, the IR differential with the wasm backend added (#45) and the robustness harness of a forced-`WASM` build (I8 comparing wasm), 4 × 500,000 and 4 × 50,000; `robust-arm64`, the robustness harness in AArch64 Release, 500,000; `sst`, SingleStepTests/80386 real mode `--execute`, 941 files. The scales are corrected from the first run's real times (design decision 2); the workflow holds the current values.*
 
 ## 결과 읽기 / Reading the results
 

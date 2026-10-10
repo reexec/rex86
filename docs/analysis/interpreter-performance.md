@@ -124,6 +124,28 @@
 
 *Unit change (confirmed): from #32 on the budget, `retired=`, `lap_instructions=` and `mips=` count steps, one per REP string iteration; the `string` workload's lap went from 53,258 to 569,354 steps, and as `mixed` includes `string`, both compare with earlier records by cost per lap, not by MIPS. Host C: a cloud VM, Intel Xeon 2.80 GHz with 4 cores (model name `Intel(R) Xeon(R) Processor`), Ubuntu 24.04, GCC 13, `linux-x64-release`; medians of five interleaved runs each of the version before (`05f4f86`) and #32, defaults (20 frames), in the table above. Confirmed: host C's wall-clock figures spread by more than 10% between minimum and maximum across five runs of one binary, so the regression was judged by cachegrind's host instruction count (`Ir`), taken as the marginal value between runs of two and six frames divided by the steps, which leaves out the start-up cost. Confirmed: workloads without REP cost about 2 more host instructions per step (0.4-0.5%), `ExecuteDecoded` copying the budget pointer from the `StepResult` into `Ctx`; the wall-clock medians' differences (alu −2.9%, the rest within ±0.5%) are within the noise. Confirmed: `string` costs 7.5% more host instructions per lap, the per-iteration check of the limit and `attention`; its wall clock in the same measurement was 6.6% faster per lap (68.1 to 72.6 laps a second), so that difference too is taken as noise. Confirmed: #32's first two implementations cost 16 more host instructions per step (alu 503.6 to 519.8): writing the allowance per instruction and reading the string's step report, and a seventh argument going on the stack and pushing registers out.*
 
+## 2.4 번역 엔진의 첫 기록 (2026-10-10, #44, #45) / First record of the translating engines
+
+근거: [#45 설계](../design/20261010-i045-wasm-backend.md), [로그](../work-logs/20261010-i045-wasm-backend.md)
+
+**확인됨**: 호스트 D는 AMD Ryzen 5 5600X(Zen 3), Linux, emsdk 3.1.74의 wasm32 Release, Node 24.19다. 세 엔진을 번갈아 세 번씩 돌린 중앙값이고, 20프레임, 기본 설정이다. 번역은 문턱 32, wasm 모듈은 블록 하나에 하나, 레지스터는 `CpuState`에 두고, 메모리 검사마다 C++ 도우미를 `call_indirect`로 부른다(#45 결정 2의 첫 판).
+
+| 워크로드 | 인터프리터 MIPS | 평가기 | wasm | wasm / 인터프리터 | 첫 프레임 ms(인터프리터 → wasm) |
+|---|---|---|---|---|---|
+| alu | 26.3 | 30.2 | 204.7 | 7.8 | 57.0 → 15.4 |
+| memory | 28.5 | 31.5 | 149.5 | 5.2 | 35.9 → 8.6 |
+| call | 28.5 | 42.2 | 124.3 | 4.4 | 35.9 → 9.3 |
+| string | 64.1 | 63.6 | 64.7 | 1.0 | 16.1 → 17.7 |
+| x87 | 11.8 | 11.3 | 11.6 | 1.0 | 87.1 → 88.9 |
+| mixed | 49.5 | 52.6 | 70.7 | 1.4 | 22.2 → 14.4 |
+
+* string과 x87은 다루는 범위 밖(REP 문자열, x87)이라 번역이 거의 일하지 않는다. 번역 통계로 보면 string은 블록마다 인터프리터로 탈출하고, x87은 블록 2개만 번역된다. mixed의 1.4배는 이 둘이 섞인 결과다.
+* 모듈 설치는 블록 하나짜리 모듈 32개에 평균 88 µs였다(`modules_installed=32`). 첫 프레임까지의 시간은 설치를 포함한 채 줄었다.
+* 같은 기계의 네이티브 x86-64 GCC Release에서 평가기는 alu에서 인터프리터의 2.7배였지만(#44 로그, 한 번씩 잰 값), wasm32에서는 1.1배다. **추정**: 평가기의 연산 디스패치가 wasm에서 상대적으로 비싸다.
+* 1.4 GHz 기판 기준 실시간 비율로 보면, alu의 wasm 204.7 MIPS는 IPC 1.0 가정에서 0.146이다. 목표(1.0)까지는 블록 연결, 블록 안 레지스터 캐싱, 인라인 검사, 다루는 범위 확대가 남았다. 각각 측정으로 고른다(#42 결정 10).
+
+*Confirmed: host D is an AMD Ryzen 5 5600X (Zen 3), Linux, an emsdk 3.1.74 wasm32 Release build on Node 24.19, medians of three interleaved runs of each engine, 20 frames, defaults; translation at threshold 32, one wasm module per block, registers kept in `CpuState`, and a C++ helper called through `call_indirect` for every memory check (#45 decision 2's first version), as in the table above. String and x87 are outside the coverage (REP strings, the x87), so translation barely works there: by the translation counts string exits to the interpreter on every block and x87 has two blocks translated, and mixed's 1.4 is their blend. Installing one-block modules averaged 88 µs over 32 modules (`modules_installed=32`), and the time to the first frame fell with installation included. On the same machine's native x86-64 GCC Release build the evaluator ran alu at 2.7 times the interpreter (#44's log, one run each), but on wasm32 at 1.1 times; estimate: the evaluator's operation dispatch costs relatively more on wasm. Against the 1.4 GHz board at IPC 1.0, wasm's 204.7 MIPS on alu is a real-time ratio of 0.146; block chaining, register caching within blocks, inline checks and wider coverage remain on the way to 1.0, each chosen by measurement (#42 decision 10).*
+
 ## 3. 읽는 법 / Reading
 
 * **확인됨(#27 시점)**: 인터프리터는 명령 종류와 거의 무관하게 2~4.5 MIPS였다. `alu`(레지스터만)와 `memory`(적재와 저장)가 비슷하고, `call`도 비슷하다. 명령 하나의 비용이 의미 계산이 아니라 **디스패치(인출, 디코드, 피연산자 해석)에 지배된다**는 뜻이다. #21 설계의 프로파일(인출과 페이지 검사 40%, 디코드 27%)과 맞는다. 다음 단계(블록 캐시, 디코드 캐시, 번역 백엔드)의 근거였고, #34의 디코드 캐시가 이것을 확인했다(2.1절).
