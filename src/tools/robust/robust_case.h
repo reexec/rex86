@@ -79,8 +79,9 @@ CaseResult RunCase(Random& random, const std::uint8_t* code = nullptr, std::size
 
 // Runs a case twice on the interpreter from identically built random
 // sources (the determinism check, I6), then once more translating every
-// block with the IR evaluator, whose architectural results must equal the
-// interpreter's (I8, design #44). make_random builds a fresh source each
+// block, with the default translation's backend or else the IR evaluator,
+// whose architectural results must equal the interpreter's (I8, designs #44
+// and #45). make_random builds a fresh source each
 // call.
 template <typename MakeRandom>
 CaseResult RunCaseTwice(const MakeRandom& make_random, const std::uint8_t* code = nullptr,
@@ -105,8 +106,13 @@ CaseResult RunCaseTwice(const MakeRandom& make_random, const std::uint8_t* code 
         first.failure = "I6: the same case ran differently twice";
         return first;
     }
-    TranslationOptions translation;
-    translation.mode = TranslationMode::kEvaluator;
+    // The process's default translation when one is on (a forced build
+    // compares its backend), the IR evaluator otherwise.
+    TranslationOptions translation = DefaultTranslation();
+    if (translation.mode == TranslationMode::kOff)
+    {
+        translation.mode = TranslationMode::kEvaluator;
+    }
     translation.threshold = 0;
     Random third_random = make_random();
     const CaseResult third = RunCase(third_random, code, code_size, &translation);

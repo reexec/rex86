@@ -39,6 +39,9 @@ enum class TranslationMode : std::uint8_t
     // blocks without a code cache on every host, and is not meant to be
     // faster than the interpreter.
     kEvaluator,
+    // wasm modules installed through TranslationOptions::wasm (design #45);
+    // wasm32 builds only.
+    kWasm,
 };
 
 struct TranslationOptions
@@ -47,7 +50,15 @@ struct TranslationOptions
     // Entries into a block head before the block is translated; 0
     // translates a block at its first entry (forced translation, for tests).
     std::uint32_t threshold = 32;
+    // For kWasm: the host's module installer.
+    WasmModuleServices* wasm = nullptr;
 };
+
+// The translation every Cpu made afterwards starts with (process-wide), so
+// that one call turns translation on everywhere; a host does it before
+// making its Cpus. Forced-translation test builds use it (design #45).
+void SetDefaultTranslation(const TranslationOptions& options);
+[[nodiscard]] const TranslationOptions& DefaultTranslation();
 
 // Counts since translation was last turned on, for diagnostics and the
 // benchmark.
@@ -120,9 +131,15 @@ public:
     [[nodiscard]] Engine ActiveEngine() const;
 
     // Turns translation on or off, dropping every translation made so far.
-    // A build with REX86_FORCE_TRANSLATION starts every Cpu with
-    // {kEvaluator, 0}.
-    void SetTranslation(const TranslationOptions& options);
+    // Returns false, leaving translation off, when the mode cannot run here
+    // (kWasm outside a wasm32 build, or without WasmModuleServices). A build
+    // with REX86_FORCE_TRANSLATION starts every Cpu with {kEvaluator, 0}.
+    bool SetTranslation(const TranslationOptions& options);
+    // An asynchronous WasmModuleServices answering an Install that returned
+    // kPending.
+    void CompleteWasmModule(std::uint32_t ticket, const std::uint32_t* table_indices,
+                            std::uint32_t count);
+    void FailWasmModule(std::uint32_t ticket);
     [[nodiscard]] const TranslationOptions& translation() const
     {
         return translation_;

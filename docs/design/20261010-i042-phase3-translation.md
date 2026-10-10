@@ -136,7 +136,7 @@ sequenceDiagram
   };
   ```
 
-  `Cpu`에는 `CompleteWasmModule(ticket, const std::uint32_t* table_indices, count)`와 `FailWasmModule(ticket)`, 생성자나 설정 함수로 `WasmModuleServices*`를 받는 길을 더한다. 정확한 이름과 위치는 wasm 하위 이슈의 세부 설계에서 정한다.
+  `Cpu`에는 `CompleteWasmModule(ticket, const std::uint32_t* table_indices, count)`와 `FailWasmModule(ticket)`, 생성자나 설정 함수로 `WasmModuleServices*`를 받는 길을 더한다. 정확한 이름과 위치는 wasm 하위 이슈의 세부 설계에서 정한다. **갱신(2026-10-10, #45 결정 1)**: `Submit`은 동기 결과도 바로 돌려주는 `Install(...) -> WasmInstall`이 됐고, 테이블 칸을 돌려받는 `Release`가 더해졌다. `WasmModuleServices*`는 `TranslationOptions::wasm`으로 받는다.
 * **참조 호스트 어댑터**: Emscripten JS 라이브러리 하나(`Submit`을 구현하고 결과를 `CompleteWasmModule`로 돌려줌)를 저장소에 둔다. 테스트와 Node 하네스가 쓰고, 두 소비자도 그대로 가져다 쓸 수 있다. 코어 라이브러리(`src/` 아래의 코어 파일, `include/`)에는 넣지 않는다. 위치는 새 디렉터리 `src/host/web/`다(**사용자 결정**, 2026-10-10). 소비자가 가져다 쓰는 호스트 어댑터의 자리이고, 나중의 AArch64용 `CodeCacheServices` 참조 구현도 같은 꼴(`src/host/<호스트>/`)로 둔다. 디렉터리를 만드는 하위 이슈 3에서 AGENTS.md 구현 규칙에 그 목적을 더한다.
 * `CodeCacheServices`(실행 메모리)는 AArch64 백엔드(5단계)를 위해 그대로 둔다. wasm에는 실행 메모리가 없으므로 두 계약은 따로다.
 

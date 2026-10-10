@@ -77,5 +77,6 @@ void RunBlockTests(rex86::test::Context& context);
 void RunRepBudgetTests(rex86::test::Context& context);
 void RunIrTests(rex86::test::Context& context);
 void RunTranslateRuntimeTests(rex86::test::Context& context);
+void RunWasmBackendTests(rex86::test::Context& context);
 
 #endif  // REX86_TESTS_UNIT_TEST_SUPPORT_H_

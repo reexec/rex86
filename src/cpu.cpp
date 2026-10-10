@@ -7,9 +7,41 @@
 #include "interp/interpreter.h"
 #include "translate/ir/frontend.h"
 #include "translate/runtime.h"
+#include "translate/wasm/backend.h"
 
 namespace rex86
 {
+
+namespace
+{
+
+// The process-wide default for new Cpus (design #45). A
+// REX86_FORCE_TRANSLATION build starts it at {kEvaluator, 0}, so that the
+// whole test suite runs through translation (design #44, decision 4).
+TranslationOptions& DefaultTranslationStorage()
+{
+    static TranslationOptions options = [] {
+        TranslationOptions initial;
+#if defined(REX86_FORCE_TRANSLATION)
+        initial.mode = TranslationMode::kEvaluator;
+        initial.threshold = 0;
+#endif
+        return initial;
+    }();
+    return options;
+}
+
+}  // namespace
+
+void SetDefaultTranslation(const TranslationOptions& options)
+{
+    DefaultTranslationStorage() = options;
+}
+
+const TranslationOptions& DefaultTranslation()
+{
+    return DefaultTranslationStorage();
+}
 
 Cpu::Cpu(GuestMemory* memory,
          Environment* environment,
@@ -18,14 +50,7 @@ Cpu::Cpu(GuestMemory* memory,
     : memory_(memory), environment_(environment), code_cache_(code_cache), features_(features)
 {
     state_.Reset();
-#if defined(REX86_FORCE_TRANSLATION)
-    // Every Cpu translates every block at its first entry, so that the whole
-    // test suite runs through translation (design #44, decision 4).
-    TranslationOptions forced;
-    forced.mode = TranslationMode::kEvaluator;
-    forced.threshold = 0;
-    SetTranslation(forced);
-#endif
+    SetTranslation(DefaultTranslationStorage());
 }
 
 Cpu::~Cpu() = default;
@@ -51,7 +76,7 @@ Engine Cpu::ActiveEngine() const
     return translator_ ? Engine::kTranslator : Engine::kInterpreter;
 }
 
-void Cpu::SetTranslation(const TranslationOptions& options)
+bool Cpu::SetTranslation(const TranslationOptions& options)
 {
     translation_ = options;
     interpret_next_ = false;
@@ -60,11 +85,44 @@ void Cpu::SetTranslation(const TranslationOptions& options)
     {
         case TranslationMode::kOff:
             translator_.reset();
-            break;
+            return true;
         case TranslationMode::kEvaluator:
             translator_ = std::make_unique<translate::Translator>(
                 std::make_unique<translate::EvaluatorBackend>(), options.threshold);
-            break;
+            return true;
+        case TranslationMode::kWasm:
+            if (!translate::wasm::Runnable() || options.wasm == nullptr)
+            {
+                // Refused, not imitated (AGENTS.md): translation stays off.
+                translator_.reset();
+                translation_.mode = TranslationMode::kOff;
+                return false;
+            }
+            translator_ = std::make_unique<translate::Translator>(
+                std::make_unique<translate::wasm::WasmBackend>(options.wasm), options.threshold);
+            return true;
+    }
+    return false;
+}
+
+void Cpu::CompleteWasmModule(const std::uint32_t ticket, const std::uint32_t* table_indices,
+                             const std::uint32_t count)
+{
+    if (translator_)
+    {
+        translator_->Complete(ticket, table_indices, count);
+    }
+    else if (translation_.wasm != nullptr && count != 0)
+    {
+        translation_.wasm->Release(table_indices, count);
+    }
+}
+
+void Cpu::FailWasmModule(const std::uint32_t ticket)
+{
+    if (translator_)
+    {
+        translator_->Fail(ticket);
     }
 }
 

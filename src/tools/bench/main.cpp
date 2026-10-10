@@ -4,8 +4,11 @@
 // target boards' reference CPUs, as [rex86-bench] key=value lines.
 //
 // Usage: rex86_bench [--frames N] [--budget N] [--ipc X] [--only a,b]
-//                    [--engine interpreter|evaluator] [--smoke] [--dump <dir>]
+//                    [--engine interpreter|evaluator|wasm] [--smoke] [--dump <dir>]
 
+#if defined(REX86_HOST_WEB)
+#include "host/web/wasm_module_services.h"
+#endif
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -68,7 +71,7 @@ void Usage()
 {
     std::fprintf(stderr,
                  "usage: rex86_bench [--frames N] [--budget N] [--ipc X] [--only a,b]\n"
-                 "                   [--engine interpreter|evaluator] [--smoke] [--dump <dir>]\n");
+                 "                   [--engine interpreter|evaluator|wasm] [--smoke] [--dump <dir>]\n");
 }
 
 std::vector<std::string> SplitCommas(const std::string& text)
@@ -272,10 +275,20 @@ int main(int argc, char** argv)
     // explicitly rather than measured as if it were there (design #27,
     // decision 6).
     rex86::TranslationOptions translation;
+#if defined(REX86_HOST_WEB)
+    rex86::host::web::WebWasmModuleServices wasm_services;
+#endif
     if (engine == "evaluator")
     {
         translation.mode = rex86::TranslationMode::kEvaluator;
     }
+#if defined(REX86_HOST_WEB)
+    else if (engine == "wasm")
+    {
+        translation.mode = rex86::TranslationMode::kWasm;
+        translation.wasm = &wasm_services;
+    }
+#endif
     else if (engine != "interpreter")
     {
         std::printf("[rex86-bench] engine=%s engine_available=false\n", engine.c_str());
@@ -286,11 +299,11 @@ int main(int argc, char** argv)
     {
         rex86::bench::Machine probe(image, image.workloads.front(), &translation);
         const rex86::Engine active = probe.cpu().ActiveEngine();
-        const rex86::Engine wanted = engine == "evaluator" ? rex86::Engine::kTranslator
-                                                            : rex86::Engine::kInterpreter;
+        const rex86::Engine wanted = engine == "interpreter" ? rex86::Engine::kInterpreter
+                                                              : rex86::Engine::kTranslator;
         std::printf("[rex86-bench] engine=%s engine_available=%s mode=%s frames=%u "
                     "frame_budget=%llu ipc=%.2f\n",
-                    engine == "evaluator" ? "evaluator" : EngineName(active),
+                    engine == "interpreter" ? EngineName(active) : engine.c_str(),
                     active == wanted ? "true" : "false",
                     smoke ? "smoke" : "measure", options.frames,
                     static_cast<unsigned long long>(options.frame_budget), options.ipc);
@@ -342,6 +355,16 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "no workload matched --only\n");
         ok = false;
     }
+#if defined(REX86_HOST_WEB)
+    if (engine == "wasm")
+    {
+        std::printf("[rex86-bench] wasm modules_installed=%llu install_ms=%.3f install_us_per_module=%.1f\n",
+                    static_cast<unsigned long long>(wasm_services.installed()), wasm_services.install_ms(),
+                    wasm_services.installed() == 0
+                        ? 0.0
+                        : 1000.0 * wasm_services.install_ms() / static_cast<double>(wasm_services.installed()));
+    }
+#endif
 
     // Goal 7's instrumentation: what the core and the harness hold. The
     // page table keeps a flag byte and a 4-byte generation per page; the

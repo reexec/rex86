@@ -71,6 +71,8 @@ void RunCpuTests(rex86::test::Context& context)
         ? rex86::Engine::kInterpreter
         : rex86::Engine::kTranslator;
     REX86_CHECK(context, cpu.ActiveEngine() == expected_engine);
+    // A forced build's default really turns its engine on in every Cpu.
+    REX86_CHECK(context, cpu.translation().mode == rex86::DefaultTranslation().mode);
     REX86_CHECK(context, cpu.memory() == &memory);
     REX86_CHECK(context, cpu.environment() == &environment);
     REX86_CHECK(context, cpu.code_cache() == nullptr);

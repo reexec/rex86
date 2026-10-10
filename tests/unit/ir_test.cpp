@@ -13,6 +13,10 @@
 #include "translate/ir/frontend.h"
 #include "translate/ir/optimize.h"
 
+#if defined(REX86_HOST_WEB)
+#include "host/web/wasm_module_services.h"
+#endif
+
 namespace
 {
 
@@ -77,6 +81,11 @@ void Report(rex86::test::Context& context, const char* name, const rex86::irdiff
 void DifferentialTests(rex86::test::Context& context)
 {
     rex86::irdiff::Options options;
+#if defined(REX86_HOST_WEB)
+    // The wasm backend runs every optimized block too (design #45).
+    rex86::host::web::WebWasmModuleServices services;
+    options.wasm = &services;
+#endif
     options.seed = 43;
     options.cases = 10000;
     const rex86::irdiff::Stats forms = rex86::irdiff::RunForms(options);

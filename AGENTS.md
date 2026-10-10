@@ -195,7 +195,7 @@ If the requirement is a simple question or confirmation request, answer it direc
 ## 구현 규칙
 
 * 코어 라이브러리(`include/rex86/`, `src/`)는 호스트 OS 헤더를 포함하지 않는다. `<windows.h>`, `<unistd.h>`, `<sys/mman.h>`, `<emscripten.h>`는 코어에 등장하지 않는다. 코어가 OS에서 필요한 것(코드 캐시 메모리, 시계)은 소비자가 구현하는 콜백 인터페이스로 받는다.
-* 호스트 OS나 호스트 CPU에 의존하는 코드는 `tests/host/<os>/`(호스트 CPU 대조 fuzz)와 `src/tools/<도구>/`의 호스트 전용 파일에만 둔다. 그런 파일은 첫머리에서 `#error`로 자기 호스트를 확인한다.
+* 호스트 OS나 호스트 CPU에 의존하는 코드는 `tests/host/<os>/`(호스트 CPU 대조 fuzz), `src/tools/<도구>/`의 호스트 전용 파일, `src/host/<호스트>/`(소비자가 가져다 쓰는 호스트 어댑터. 예: `src/host/web/`의 `WasmModuleServices` 구현, #45)에만 둔다. 그런 파일은 첫머리에서 `#error`로 자기 호스트를 확인한다. `src/host/`는 코어 라이브러리(`rex86_core`)에 들어가지 않고 별도 타깃으로 빌드한다.
 * 실행 엔진은 디렉터리로 나눈다. `src/interp/`(인터프리터), `src/translate/ir/`(x86 블록을 IR로 올리는 프런트엔드), `src/translate/wasm/`, `src/translate/aarch64/`(백엔드). x86 명령의 의미는 인터프리터와 IR 프런트엔드에만 있고, 백엔드는 IR만 안다. 백엔드에 x86 의미를 다시 쓰지 않는다.
 * 코어는 게스트 형식, OS, 그래픽 API, 자산, 특정 게임을 모른다. 소비자 한쪽의 사정이 코어에 들어와야 하면 기능 플래그(`Features`)나 콜백의 기본값으로 표현하고, 그 사정이 무엇인지 설계에 적는다.
 * 성립하지 않는 기능은 조용히 성공하는 더미로 두지 않는다. 거짓이나 명시적 상태(`kNoEngine` 같은 열거값)를 돌려주고 이유를 한 번 보고한다.
@@ -213,7 +213,7 @@ If the requirement is a simple question or confirmation request, answer it direc
 ## Implementation Rules
 
 * The core library (`include/rex86/`, `src/`) includes no host OS header. `<windows.h>`, `<unistd.h>`, `<sys/mman.h>` and `<emscripten.h>` do not appear in the core. What the core needs from the OS (code-cache memory, clocks) arrives through callback interfaces the consumer implements.
-* Code that depends on the host OS or the host CPU lives only in `tests/host/<os>/` (the host-CPU comparison fuzz) and in host-specific files under `src/tools/<tool>/`. Such a file checks its own host with `#error` at the top.
+* Code that depends on the host OS or the host CPU lives only in `tests/host/<os>/` (the host-CPU comparison fuzz), in host-specific files under `src/tools/<tool>/`, and in `src/host/<host>/` (host adapters consumers take, such as the `WasmModuleServices` implementation in `src/host/web/`, #45). Such a file checks its own host with `#error` at the top. `src/host/` stays out of the core library (`rex86_core`) and builds as separate targets.
 * Execution engines are split by directory: `src/interp/` (the interpreter), `src/translate/ir/` (the frontend lifting x86 blocks to IR), `src/translate/wasm/` and `src/translate/aarch64/` (backends). The meaning of x86 instructions exists only in the interpreter and the IR frontend; a backend knows IR alone. Never reimplement x86 semantics in a backend.
 * The core knows no guest format, OS, graphics API, asset or particular game. When one consumer's circumstance must enter the core, express it as a feature flag (`Features`) or a callback default, and record in the design what that circumstance is.
 * A capability that does not hold is never a quietly succeeding dummy. Return false or an explicit state (an enumerator such as `kNoEngine`) and report the reason once.

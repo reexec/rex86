@@ -179,3 +179,11 @@ jobs:
         run: ctest --test-dir build/web-wasm-release --output-on-failure
       - name: Probe
         run: node build/web-wasm-release/bin/rex86_probe.js
+      # Every Cpu translating every block with the wasm backend through the
+      # web adapter (design #45): the whole ctest runs on generated modules.
+      - name: Configure (forced wasm translation)
+        run: emcmake cmake -S . -B build/web-wasm-translate -G Ninja -DCMAKE_BUILD_TYPE=Release -DREX86_WARNINGS_AS_ERRORS=ON -DREX86_FORCE_TRANSLATION=WASM
+      - name: Build (forced wasm translation)
+        run: cmake --build build/web-wasm-translate
+      - name: Test (forced wasm translation)
+        run: ctest --test-dir build/web-wasm-translate --output-on-failure

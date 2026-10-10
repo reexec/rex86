@@ -11,6 +11,8 @@
 #include <map>
 #include <string>
 
+#include "rex86/environment.h"
+
 namespace rex86::irdiff
 {
 
@@ -21,6 +23,9 @@ struct Options
     // Instructions per block for RunBlocks (1 to this many).
     unsigned max_block = 16;
     bool verbose = false;
+    // When given (a wasm32 build with the web adapter), every optimized block
+    // also runs through the wasm backend and is compared (design #45).
+    WasmModuleServices* wasm = nullptr;
 };
 
 struct Stats
@@ -31,6 +36,8 @@ struct Stats
     // Cases where a check sent the first instruction to the interpreter.
     std::uint64_t exited = 0;
     std::uint64_t mismatches = 0;
+    // Blocks the wasm backend ran.
+    std::uint64_t wasm_runs = 0;
     std::map<std::string, std::uint64_t> compared_by_mnemonic;
     // The first mismatch, for the report.
     std::string first_failure;

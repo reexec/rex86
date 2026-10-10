@@ -13,6 +13,70 @@ Translator::Translator(std::unique_ptr<Backend> backend, const std::uint32_t thr
 {
 }
 
+Translator::~Translator()
+{
+    Flush();
+}
+
+void Translator::Forget(Entry* entry)
+{
+    if (entry->state == State::kTranslated)
+    {
+        backend_->Drop(entry->translation);
+    }
+    // A pending installation stays in pending_: the host may still be reading
+    // its bytes, and Complete or Fail discards it when it answers.
+    *entry = Entry{};
+}
+
+void Translator::Complete(const std::uint32_t ticket, const std::uint32_t* handles,
+                          const std::uint32_t count)
+{
+    const auto waiting = pending_.find(ticket);
+    if (waiting == pending_.end())
+    {
+        return;  // already answered
+    }
+    Entry* entry = nullptr;
+    const auto found = entries_.find(waiting->second);
+    if (found != entries_.end() && found->second.state == State::kPending &&
+        found->second.translation.ticket == ticket)
+    {
+        entry = &found->second;
+    }
+    pending_.erase(waiting);
+    backend_->Finished(ticket);
+    if (entry == nullptr || count == 0)
+    {
+        backend_->Discard(handles, count);
+        return;
+    }
+    entry->translation.handle = handles[0];
+    entry->state = State::kTranslated;
+    ++translated_;
+    // The pages may have changed while it was installed: Lookup checks the
+    // generations before every run.
+}
+
+void Translator::Fail(const std::uint32_t ticket)
+{
+    const auto waiting = pending_.find(ticket);
+    if (waiting == pending_.end())
+    {
+        return;
+    }
+    const auto found = entries_.find(waiting->second);
+    pending_.erase(waiting);
+    backend_->Finished(ticket);
+    if (found != entries_.end() && found->second.state == State::kPending &&
+        found->second.translation.ticket == ticket)
+    {
+        found->second = Entry{};
+        found->second.state = State::kUntranslatable;
+        found->second.refused_generation = 0xFFFFFFFFu;  // retried after any code change
+    }
+}
+
 bool Translator::StillValid(const ir::Block& block, const GuestMemory& memory)
 {
     // A store into translated code, InvalidateCode or the host's own page
@@ -41,6 +105,7 @@ void Translator::Translate(Entry* entry, const CpuState& state, GuestMemory& mem
         return;
     }
     ir::Optimize(&translation.block);
+    translation.ticket = next_ticket_++;
     // A store to these pages now invalidates the translation; the block's
     // own stores into them leave the instruction to the interpreter.
     for (std::uint32_t i = 0; i < translation.block.page_count; ++i)
@@ -55,8 +120,9 @@ void Translator::Translate(Entry* entry, const CpuState& state, GuestMemory& mem
             ++translated_;
             break;
         case CompileStatus::kPending:
-            // No asynchronous backend exists yet (#45); counted again.
-            entry->count = 0;
+            entry->state = State::kPending;
+            entry->translation = std::move(translation);
+            pending_[entry->translation.ticket] = state.eip;
             break;
         case CompileStatus::kFailed:
             entry->state = State::kUntranslatable;
@@ -80,8 +146,11 @@ const Translation* Translator::Lookup(const CpuState& state, GuestMemory& memory
             {
                 return &entry.translation;
             }
-            entry = Entry{};
+            Forget(&entry);
             break;
+        case State::kPending:
+            // The interpreter runs the block until the host installs it.
+            return nullptr;
         case State::kUntranslatable:
             if (memory.pages().Generation(state.eip) == entry.refused_generation)
             {
@@ -103,7 +172,12 @@ const Translation* Translator::Lookup(const CpuState& state, GuestMemory& memory
 
 void Translator::Flush()
 {
+    for (auto& item : entries_)
+    {
+        Forget(&item.second);
+    }
     entries_.clear();
+    // Tickets still out are discarded when they complete.
 }
 
 std::size_t Translator::FootprintBytes() const

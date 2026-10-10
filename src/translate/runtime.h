@@ -26,7 +26,10 @@ namespace rex86::translate
 struct Translation
 {
     ir::Block block;
+    // The backend's: a wasm table index, for one.
     std::uint32_t handle = 0;
+    // Names an asynchronous installation (design #45).
+    std::uint32_t ticket = 0;
 };
 
 enum class CompileStatus : std::uint8_t
@@ -43,6 +46,13 @@ public:
     virtual CompileStatus Compile(Translation* translation) = 0;
     virtual ir::ExitResult Run(const Translation& translation, CpuState& state,
                                GuestMemory& memory) = 0;
+    // A ready translation is dropped: the backend may free what it holds.
+    virtual void Drop(const Translation&) {}
+    // A pending installation ended (completed, failed, or abandoned).
+    virtual void Finished(std::uint32_t /*ticket*/) {}
+    // Frees table entries an installation completed for a translation that
+    // is gone.
+    virtual void Discard(const std::uint32_t* /*handles*/, std::uint32_t /*count*/) {}
     // Bytes held beyond the translations' IR.
     [[nodiscard]] virtual std::size_t FootprintBytes() const { return 0; }
 };
@@ -73,6 +83,14 @@ public:
     static constexpr std::size_t kMaxEntries = 65536;
 
     Translator(std::unique_ptr<Backend> backend, std::uint32_t threshold);
+    ~Translator();
+    Translator(const Translator&) = delete;
+    Translator& operator=(const Translator&) = delete;
+
+    // An asynchronous backend's installation completed or failed. A ticket
+    // whose head is gone, or no longer waits, is discarded.
+    void Complete(std::uint32_t ticket, const std::uint32_t* handles, std::uint32_t count);
+    void Fail(std::uint32_t ticket);
 
     // The runnable translation of the block at CS:EIP, or null. Counts an
     // entry, and translates the block once the count reaches the threshold.
@@ -96,6 +114,7 @@ private:
     enum class State : std::uint8_t
     {
         kCounting,
+        kPending,
         kTranslated,
         kUntranslatable,
     };
@@ -111,12 +130,17 @@ private:
     };
 
     static bool StillValid(const ir::Block& block, const GuestMemory& memory);
+    // Resets an entry, telling the backend about what it held.
+    void Forget(Entry* entry);
     void Translate(Entry* entry, const CpuState& state, GuestMemory& memory,
                    const Features& features, const interp::GateFilter* gates);
 
     std::unique_ptr<Backend> backend_;
     std::uint32_t threshold_;
     std::unordered_map<std::uint32_t, Entry> entries_;
+    // Pending installations: ticket to block head.
+    std::unordered_map<std::uint32_t, std::uint32_t> pending_;
+    std::uint32_t next_ticket_ = 1;
     std::uint64_t translated_ = 0;
 };
 

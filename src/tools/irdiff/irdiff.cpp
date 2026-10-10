@@ -14,6 +14,8 @@
 #include "translate/ir/evaluator.h"
 #include "translate/ir/frontend.h"
 #include "translate/ir/optimize.h"
+#include "translate/runtime.h"
+#include "translate/wasm/backend.h"
 
 namespace rex86::irdiff
 {
@@ -380,6 +382,49 @@ struct Runner
             Fail(std::string(label) + ": " + difference, code, length, block);
         }
     }
+
+    // The same block through the wasm backend, against the interpreter.
+    void CompareWasm(const Machine& start, const translate::ir::Block& block,
+                     const std::uint8_t* code, const unsigned length, const char* label)
+    {
+        if (options.wasm == nullptr || !translate::wasm::Runnable())
+        {
+            return;
+        }
+        translate::wasm::WasmBackend backend(options.wasm);
+        translate::Translation translation;
+        translation.block = block;
+        translation.ticket = 1;
+        if (backend.Compile(&translation) != translate::CompileStatus::kReady)
+        {
+            Fail(std::string(label) + ": the host refused the module", code, length, block);
+            return;
+        }
+        Machine compiled(start);
+        const translate::ir::ExitResult exit = backend.Run(translation, compiled.state, compiled.memory);
+        backend.Drop(translation);
+        ++stats.wasm_runs;
+        Machine interpreted(start);
+        for (std::uint32_t i = 0; i < exit.steps; ++i)
+        {
+            interp::Step(interpreted.state, interpreted.memory, environment, features);
+        }
+        const translate::ir::ExitResult evaluated_exit = [&] {
+            Machine evaluated(start);
+            return translate::ir::Evaluate(block, evaluated.state, evaluated.memory);
+        }();
+        std::string difference = Difference(interpreted, compiled);
+        if (difference.empty() &&
+            (exit.kind != evaluated_exit.kind || exit.steps != evaluated_exit.steps ||
+             exit.eip != evaluated_exit.eip))
+        {
+            difference = "the exit differs from the evaluator's";
+        }
+        if (!difference.empty())
+        {
+            Fail(std::string(label) + ": " + difference, code, length, block);
+        }
+    }
 };
 
 }  // namespace
@@ -440,6 +485,7 @@ Stats RunForms(const Options& options)
         }
         runner.Compare(start, block, bytes, d.Length(), "form");
         runner.Compare(start, optimized, bytes, d.Length(), "form optimized");
+        runner.CompareWasm(start, optimized, bytes, d.Length(), "form wasm");
     }
     return runner.stats;
 }
@@ -489,6 +535,8 @@ Stats RunBlocks(const Options& options)
         runner.Compare(start, block, code.data(), static_cast<unsigned>(code.size()), "block");
         runner.Compare(start, optimized, code.data(), static_cast<unsigned>(code.size()),
                        "block optimized");
+        runner.CompareWasm(start, optimized, code.data(), static_cast<unsigned>(code.size()),
+                           "block wasm");
     }
     return runner.stats;
 }

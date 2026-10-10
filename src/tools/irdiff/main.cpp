@@ -11,6 +11,10 @@
 
 #include "tools/irdiff/irdiff.h"
 
+#if defined(REX86_HOST_WEB)
+#include "host/web/wasm_module_services.h"
+#endif
+
 namespace
 {
 
@@ -18,11 +22,12 @@ void Print(const char* kind, const rex86::irdiff::Options& options,
            const rex86::irdiff::Stats& stats)
 {
     std::printf("[rex86-irdiff] kind=%s seed=%llu cases=%llu compared=%llu exited=%llu "
-                "mnemonics=%zu mismatches=%llu\n",
+                "mnemonics=%zu wasm_runs=%llu mismatches=%llu\n",
                 kind, static_cast<unsigned long long>(options.seed),
                 static_cast<unsigned long long>(stats.cases),
                 static_cast<unsigned long long>(stats.compared),
                 static_cast<unsigned long long>(stats.exited), stats.compared_by_mnemonic.size(),
+                static_cast<unsigned long long>(stats.wasm_runs),
                 static_cast<unsigned long long>(stats.mismatches));
     if (stats.mismatches != 0)
     {
@@ -36,6 +41,10 @@ int main(int argc, char** argv)
 {
     rex86::irdiff::Options options;
     options.cases = 100000;
+#if defined(REX86_HOST_WEB)
+    rex86::host::web::WebWasmModuleServices services;
+    options.wasm = &services;
+#endif
     for (int i = 1; i < argc; ++i)
     {
         const bool has_value = i + 1 < argc;

@@ -28,6 +28,12 @@ sequenceDiagram
 
 *Sharing memory: the new module defines no memory and imports the existing module's `WebAssembly.Memory`, so the new code reads and writes guest memory and CPU state at the same linear addresses; an imported memory's minimum must not exceed the actual size (WebAssembly JS API). A function pointer is a table index: in wasm32 a C/C++ function pointer indexes the indirect function table; Emscripten's `addFunction` puts a function into the table and returns "an integer value that represents a function pointer", which C code can call; adding table slots needs `-sALLOW_TABLE_GROWTH`, the table having a fixed size otherwise (Emscripten: Interacting with code). So the core's C++ calls generated code with no emscripten header; only handing over the bytes and receiving the index belongs to the host's JS.*
 
+## 이 저장소에서 잰 값 / Measured here
+
+이 저장소의 wasm 백엔드(#45)에서 잰 설치 시간과 처리량은 [인터프리터 성능 분석](../analysis/interpreter-performance.md) 2.4절에 있다.
+
+*The installation times and throughput measured for this repository's wasm backend (#45) are in section 2.4 of the interpreter performance analysis.*
+
 ## 동기와 비동기 컴파일 / Synchronous and asynchronous compilation
 
 * `new WebAssembly.Module(bytes)`와 `new WebAssembly.Instance(...)`는 동기다. `WebAssembly.compile`과 `WebAssembly.instantiate`는 Promise를 돌려준다.
