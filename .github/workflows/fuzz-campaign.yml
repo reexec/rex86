@@ -1,0 +1,312 @@
+name: fuzz-campaign
+
+# The release fuzz campaign (design #37). A v* tag runs it at full scale;
+# workflow_dispatch runs it on any ref at a chosen scale; a branch push that
+# changes the campaign's own files runs it at smoke scale so a broken
+# workflow is caught before merging. Path filters do not apply to tag
+# pushes. ci.yml filters on branches, so it never runs on a tag.
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+    paths:
+      - .github/workflows/fuzz-campaign.yml
+      - scripts/fuzz_campaign.sh
+  workflow_dispatch:
+    inputs:
+      scale:
+        description: full or smoke
+        type: choice
+        options: [full, smoke]
+        default: full
+      seed_offset:
+        description: added to every base seed (a tag uses its version * 10^8)
+        type: string
+        default: '0'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-campaign-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  CAMPAIGN_LOG_DIR: campaign-logs
+
+jobs:
+  # The scale and the seed offset every job uses (decisions 1 and 3).
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      scale: ${{ steps.plan.outputs.scale }}
+      offset: ${{ steps.plan.outputs.offset }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        env:
+          INPUT_SCALE: ${{ inputs.scale }}
+          INPUT_OFFSET: ${{ inputs.seed_offset }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            scale=full
+            if ! offset=$(scripts/fuzz_campaign.sh offset "$GITHUB_REF_NAME"); then
+              echo "::warning::$GITHUB_REF_NAME is not vMAJOR.MINOR.PATCH; seed offset 0"
+              offset=0
+            fi
+          elif [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            scale=$INPUT_SCALE
+            offset=$INPUT_OFFSET
+          else
+            scale=smoke
+            offset=0
+          fi
+          [[ "$offset" =~ ^[0-9]+$ ]] || { echo "::error::seed offset must be a number: $offset"; exit 1; }
+          echo "scale=$scale" >> "$GITHUB_OUTPUT"
+          echo "offset=$offset" >> "$GITHUB_OUTPUT"
+          echo "ref=$GITHUB_REF scale=$scale offset=$offset" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # The integer host comparison needs an i386 process (#22, decision 1): a
+  # gcc-multilib -m32 build, so the job keeps JavaScript actions.
+  int-i386:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - warmup: default
+            cmake_extra: ''
+            base: 30000000
+          - warmup: '0'
+            cmake_extra: -DREX86_DECODE_CACHE_WARMUP=0
+            base: 40000000
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build g++-multilib
+      - name: Build
+        run: |
+          cmake -S . -B build/i386 -G Ninja -DCMAKE_BUILD_TYPE=Release -DREX86_WARNINGS_AS_ERRORS=ON \
+            -DCMAKE_C_FLAGS=-m32 -DCMAKE_CXX_FLAGS=-m32 -DCMAKE_EXE_LINKER_FLAGS=-m32 ${{ matrix.cmake_extra }}
+          cmake --build build/i386 --target rex86_int_fuzz
+      - name: Fuzz
+        run: |
+          cases=$([ "${{ needs.plan.outputs.scale }}" = full ] && echo 5000000 || echo 20000)
+          scripts/fuzz_campaign.sh run int-i386-warmup-${{ matrix.warmup }} 4 "$cases" \
+            $(( ${{ matrix.base }} + ${{ needs.plan.outputs.offset }} )) 1 -- \
+            build/i386/bin/rex86_int_fuzz {CASES} {SEED} --failures "$CAMPAIGN_LOG_DIR/int-{SHARD}.rxt"
+      - name: Keep logs and failing cases
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: campaign-int-i386-warmup-${{ matrix.warmup }}
+          path: campaign-logs/
+
+  x87-simd:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build g++-multilib
+      - name: Build
+        run: |
+          cmake -S . -B build/x64 -G Ninja -DCMAKE_BUILD_TYPE=Release -DREX86_WARNINGS_AS_ERRORS=ON
+          cmake --build build/x64 --target rex86_x87_fuzz rex86_simd_fuzz
+          cmake -S . -B build/i386 -G Ninja -DCMAKE_BUILD_TYPE=Release -DREX86_WARNINGS_AS_ERRORS=ON \
+            -DCMAKE_C_FLAGS=-m32 -DCMAKE_CXX_FLAGS=-m32 -DCMAKE_EXE_LINKER_FLAGS=-m32
+          cmake --build build/i386 --target rex86_simd_fuzz
+      - name: x87 (x86-64)
+        run: |
+          cases=$([ "${{ needs.plan.outputs.scale }}" = full ] && echo 25000000 || echo 20000)
+          scripts/fuzz_campaign.sh run x87-x64 4 "$cases" $(( 50000000 + ${{ needs.plan.outputs.offset }} )) 1 -- \
+            build/x64/bin/rex86_x87_fuzz {CASES} {SEED}
+      - name: SIMD (x86-64)
+        if: success() || failure()
+        run: |
+          cases=$([ "${{ needs.plan.outputs.scale }}" = full ] && echo 25000000 || echo 20000)
+          scripts/fuzz_campaign.sh run simd-x64 4 "$cases" $(( 60000000 + ${{ needs.plan.outputs.offset }} )) 1 -- \
+            build/x64/bin/rex86_simd_fuzz {CASES} {SEED}
+      - name: SIMD (i386)
+        if: success() || failure()
+        run: |
+          cases=$([ "${{ needs.plan.outputs.scale }}" = full ] && echo 5000000 || echo 20000)
+          scripts/fuzz_campaign.sh run simd-i386 4 "$cases" $(( 70000000 + ${{ needs.plan.outputs.offset }} )) 1 -- \
+            build/i386/bin/rex86_simd_fuzz {CASES} {SEED}
+      - name: Keep logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: campaign-x87-simd
+          path: campaign-logs/
+
+  # The robustness harness takes contiguous seed ranges, so shards step by
+  # their case count.
+  robust-release:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Build
+        run: |
+          cmake -S . -B build/x64 -G Ninja -DCMAKE_BUILD_TYPE=Release -DREX86_WARNINGS_AS_ERRORS=ON
+          cmake --build build/x64 --target rex86_robust
+      - name: Fuzz
+        run: |
+          cases=$([ "${{ needs.plan.outputs.scale }}" = full ] && echo 250000 || echo 500)
+          scripts/fuzz_campaign.sh run robust-release 4 "$cases" $(( 0 + ${{ needs.plan.outputs.offset }} )) "$cases" -- \
+            build/x64/bin/rex86_robust --cases {CASES} --seed {SEED}
+      - name: Keep logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: campaign-robust-release
+          path: campaign-logs/
+
+  # GCC's ASan and UBSan with the decode cache always on, as the branch
+  # CI's sanitizer job.
+  robust-asan:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Build
+        run: |
+          cmake -S . -B build/asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DREX86_WARNINGS_AS_ERRORS=ON \
+            -DREX86_SANITIZE=address,undefined -DREX86_DECODE_CACHE_WARMUP=0
+          cmake --build build/asan --target rex86_robust
+      - name: Fuzz
+        run: |
+          cases=$([ "${{ needs.plan.outputs.scale }}" = full ] && echo 25000 || echo 100)
+          scripts/fuzz_campaign.sh run robust-asan 4 "$cases" $(( 10000000 + ${{ needs.plan.outputs.offset }} )) "$cases" -- \
+            build/asan/bin/rex86_robust --cases {CASES} --seed {SEED}
+      - name: Keep logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: campaign-robust-asan
+          path: campaign-logs/
+
+  # Clang with ASan, UBSan and libFuzzer. The whole ctest runs first in this
+  # configuration, which the branch CI only builds the fuzzer in (#32 found
+  # UB there). The corpus carries over between runs through the cache.
+  libfuzzer:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Build
+        env:
+          CC: clang
+          CXX: clang++
+        run: |
+          cmake -S . -B build/libfuzzer -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DREX86_LIBFUZZER=ON \
+            -DREX86_SANITIZE=address,undefined -DREX86_WARNINGS_AS_ERRORS=ON
+          cmake --build build/libfuzzer
+      - name: Test in this configuration
+        run: ctest --test-dir build/libfuzzer --output-on-failure
+      - name: Restore the corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: libfuzzer-corpus
+          key: libfuzzer-corpus-${{ github.run_id }}
+          restore-keys: libfuzzer-corpus-
+      - name: Fuzz
+        run: |
+          seconds=$([ "${{ needs.plan.outputs.scale }}" = full ] && echo 1800 || echo 60)
+          mkdir -p libfuzzer-corpus "$CAMPAIGN_LOG_DIR/crashes"
+          scripts/fuzz_campaign.sh run libfuzzer 1 "$seconds" $(( ${{ needs.plan.outputs.offset }} % 4294967296 )) 0 -- \
+            build/libfuzzer/bin/rex86_robust_libfuzzer libfuzzer-corpus -fork=4 -seed={SEED} \
+            -max_total_time={CASES} -timeout=10 -max_len=512 -len_control=0 \
+            -artifact_prefix="$CAMPAIGN_LOG_DIR/crashes/"
+      - name: Save the corpus
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: libfuzzer-corpus
+          key: libfuzzer-corpus-${{ github.run_id }}
+      - name: Keep logs and crashing inputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: campaign-libfuzzer
+          path: campaign-logs/
+
+  # The same invariants on an AArch64 host.
+  robust-arm64:
+    needs: plan
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Build
+        run: |
+          cmake -S . -B build/arm64 -G Ninja -DCMAKE_BUILD_TYPE=Release -DREX86_WARNINGS_AS_ERRORS=ON
+          cmake --build build/arm64 --target rex86_robust
+      - name: Fuzz
+        run: |
+          cases=$([ "${{ needs.plan.outputs.scale }}" = full ] && echo 125000 || echo 500)
+          scripts/fuzz_campaign.sh run robust-arm64 4 "$cases" $(( 20000000 + ${{ needs.plan.outputs.offset }} )) "$cases" -- \
+            build/arm64/bin/rex86_robust --cases {CASES} --seed {SEED}
+      - name: Keep logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: campaign-robust-arm64
+          path: campaign-logs/
+
+  # SingleStepTests/80386 real mode, executed (#7, #17). The suite is fetched
+  # each run and never committed; its files are dealt round-robin into four
+  # shard directories next to 80386.csv, which the runner reads from the
+  # parent directory.
+  sst:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Build
+        run: |
+          cmake -S . -B build/x64 -G Ninja -DCMAKE_BUILD_TYPE=Release -DREX86_WARNINGS_AS_ERRORS=ON
+          cmake --build build/x64 --target rex86_sst
+      - name: Fetch the suite
+        run: |
+          git clone --depth 1 https://github.com/SingleStepTests/80386.git "$RUNNER_TEMP/sst"
+          git -C "$RUNNER_TEMP/sst" log -1 --format='suite commit %H' | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Prepare shards
+        run: |
+          cd "$RUNNER_TEMP/sst"
+          mapfile -t files < <(ls v1_ex_real_mode/*.MOO.gz | sort)
+          if [ "${{ needs.plan.outputs.scale }}" != full ]; then files=("${files[@]:0:8}"); fi
+          for k in 0 1 2 3; do mkdir -p "shard-$k"; done
+          for i in "${!files[@]}"; do
+            name=$(basename "${files[i]}" .gz)
+            gunzip -c "${files[i]}" > "shard-$(( i % 4 ))/$name"
+          done
+          echo "files=${#files[@]}"
+      - name: Execute
+        run: |
+          scripts/fuzz_campaign.sh run sst 4 0 0 0 -- \
+            build/x64/bin/rex86_sst "$RUNNER_TEMP/sst/shard-{SHARD}" --execute
+      - name: Keep logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: campaign-sst
+          path: campaign-logs/

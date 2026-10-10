@@ -68,13 +68,26 @@ flowchart LR
 
 ## 결정 3: 시드 / Decision 3: seeds
 
-시드는 tag에서 계산한다. `vMAJOR.MINOR.PATCH`의 버전 번호 `n = MAJOR × 10000 + MINOR × 100 + PATCH`(v0.0.19는 19)로 `오프셋 = n × 1,000,000`을 정하고, 도구별 기본 시드에 더한다. shard k(0부터)는 그 위에 `k`를 더한다(호스트 대조 fuzz). 견고성 하네스는 시드가 연속 구간이므로 shard마다 `k × shard당 건수`를 더한다.
+시드는 tag에서 계산한다. `vMAJOR.MINOR.PATCH`의 버전 번호 `n = MAJOR × 10000 + MINOR × 100 + PATCH`(v0.0.19는 19)로 `오프셋 = n × 10^8`을 정하고, 도구별 기본 시드에 더한다. 호스트 대조 fuzz는 shard k(0부터)마다 `k`를 더하고, 견고성 하네스는 시드가 연속 구간이므로 `k × shard당 건수`를 더한다. libFuzzer의 `-seed`는 32비트라 오프셋을 2^32로 나눈 나머지를 쓴다.
+
+| 작업 | 기본 시드 |
+|---|---|
+| 견고성 Release | 0 |
+| 견고성 ASan/UBSan | 10,000,000 |
+| 견고성 AArch64 | 20,000,000 |
+| 정수 (예열 기본값) | 30,000,000 |
+| 정수 (예열 0) | 40,000,000 |
+| x87 | 50,000,000 |
+| SIMD x86-64 | 60,000,000 |
+| SIMD i386 | 70,000,000 |
+
+기본 시드 사이가 10^7이고 견고성 Release의 전체 구간이 100만이므로, 한 릴리스 안에서 구간이 겹치지 않는다. 릴리스 사이는 10^8씩 떨어진다.
 
 * 릴리스마다 새 입력 공간을 보고, tag 이름만으로 어떤 시드였는지 다시 계산할 수 있다.
 * `workflow_dispatch`와 smoke는 입력의 오프셋을 쓴다(기본값 0).
 * 작업 요약과 로그의 첫 줄에 실제 시드를 적는다.
 
-*Seeds derive from the tag: the version number `n = MAJOR × 10000 + MINOR × 100 + PATCH` of `vMAJOR.MINOR.PATCH` (19 for v0.0.19) gives `offset = n × 1,000,000`, added to each tool's base seed; shard k (from 0) adds `k` on top for the host-comparison fuzzes, and, since the robustness harness takes a contiguous seed range, `k × cases per shard` for it. Each release explores new inputs, and the seeds can be recomputed from the tag name alone. `workflow_dispatch` and smoke use the input's offset (default 0). The job summary and the first log line state the actual seeds.*
+*Seeds derive from the tag: the version number `n = MAJOR × 10000 + MINOR × 100 + PATCH` of `vMAJOR.MINOR.PATCH` (19 for v0.0.19) gives `offset = n × 10^8`, added to each tool's base seed in the table above; shard k (from 0) adds `k` for the host-comparison fuzzes and, since the robustness harness takes a contiguous seed range, `k × cases per shard` for it; libFuzzer's `-seed` is 32-bit, so it takes the offset modulo 2^32. The bases lie 10^7 apart and the Release robustness range spans 1M, so no ranges overlap within a release, and releases lie 10^8 apart. Each release explores new inputs, and the seeds can be recomputed from the tag name alone. `workflow_dispatch` and smoke use the input's offset (default 0). The job summary and the first log line state the actual seeds.*
 
 ## 결정 4: 판정과 제조사 차이 / Decision 4: verdicts and vendor differences
 
