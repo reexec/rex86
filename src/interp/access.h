@@ -29,6 +29,10 @@ struct StepBudget
     std::uint64_t limit = ~std::uint64_t{0};
     std::uint64_t used = 0;
     const std::atomic<bool>* attention = nullptr;
+    // Receives the instruction's decode when it stops between iterations,
+    // so that resuming continues the instruction it started rather than
+    // whatever its bytes became (design #50, decision 1).
+    decode::DecodedInstruction* partial = nullptr;
 };
 
 // One instruction's execution context. `fault` is filled by the first

@@ -143,6 +143,23 @@ std::vector<std::uint8_t> Program(const std::uint32_t source, const std::uint32_
     return code;
 }
 
+// REP strings whose iterations overwrite their own bytes (design #50):
+// stopped between iterations, each must go on as it was decoded rather than
+// as its bytes now read. Program puts the body at kCode + 15.
+const std::vector<std::vector<std::uint8_t>>& SelfOverwritingPrograms()
+{
+    static const std::vector<std::vector<std::uint8_t>> programs = {
+        // mov al, 0x90; rep stosb over the F3 AA at kCode + 17
+        Program(kSource, kCode + 17, 2, {0xB0, 0x90, 0xF3, 0xAA}),
+        // std; mov eax, 0x90909090; rep stosd from kCode + 21 downwards
+        Program(kSource, kCode + 21, 2,
+                {0xFD, 0xB8, 0x90, 0x90, 0x90, 0x90, 0xF3, 0xAB, 0x90, 0x90, 0x90}),
+        // rep movsb copying the source pattern over the F3 A4 at kCode + 15
+        Program(kSource, kCode + 15, 2, {0xF3, 0xA4}),
+    };
+    return programs;
+}
+
 // Runs the program uninterrupted, then again in Runs of each budget, and
 // checks that the registers, memory, port traffic and step totals match.
 void CheckEquivalence(rex86::test::Context& context, const bool warm,
@@ -211,6 +228,56 @@ void RunRepBudgetTests(rex86::test::Context& context)
             {
                 CheckEquivalence(context, warm, code);
             }
+            for (const auto& code : SelfOverwritingPrograms())
+            {
+                CheckEquivalence(context, warm, code);
+            }
+        }
+        // Translation splits a REP where its blocks hand single steps to the
+        // interpreter; the result must still be the interpreter's (#50).
+        for (const auto& code : SelfOverwritingPrograms())
+        {
+            Rig interpreted(warm);
+            interpreted.Put(kCode, code);
+            const rex86::Event reference = interpreted.cpu.Run(100000);
+            Rig translated(warm);
+            rex86::TranslationOptions options;
+            options.mode = rex86::TranslationMode::kEvaluator;
+            options.threshold = 0;
+            translated.cpu.SetTranslation(options);
+            translated.Put(kCode, code);
+            const rex86::Event event = translated.cpu.Run(100000);
+            REX86_CHECK(context, event.reason == reference.reason);
+            REX86_CHECK_EQ(context, event.steps, reference.steps);
+            REX86_CHECK(context, translated.cpu.state().gpr == interpreted.cpu.state().gpr);
+            REX86_CHECK_EQ(context, translated.cpu.state().eip, interpreted.cpu.state().eip);
+            REX86_CHECK(context, translated.buffer == interpreted.buffer);
+        }
+        // The saved decode serves only the instruction left in progress: a
+        // host that moves EIP, or changes CS's mode, has the bytes fetched
+        // again (design #50).
+        {
+            Rig rig(warm);
+            rig.Put(kCode, SelfOverwritingPrograms()[0]);
+            rig.Put(0x3000, {0xF4});  // hlt
+            REX86_CHECK(context, rig.cpu.Run(3 + 1 + 1).reason == StopReason::kBudgetExhausted);
+            REX86_CHECK(context, rig.cpu.InstructionInProgress());
+            rig.cpu.state().eip = 0x3000;
+            REX86_CHECK(context, rig.cpu.Run(10).reason == StopReason::kHalted);
+            REX86_CHECK_EQ(context, rig.cpu.state().eip, 0x3001u);
+            REX86_CHECK_EQ(context, rig.cpu.state().Get(Gpr::kEcx), 1u);
+        }
+        {
+            Rig rig(warm);
+            rig.Put(kCode, SelfOverwritingPrograms()[0]);
+            REX86_CHECK(context, rig.cpu.Run(3 + 1 + 1).reason == StopReason::kBudgetExhausted);
+            REX86_CHECK(context, rig.cpu.InstructionInProgress());
+            // In 16-bit mode the bytes now at kCode + 17 read 90 (NOP): the
+            // step runs it rather than the stored iteration.
+            rig.cpu.state().Seg(rex86::Segment::kCs).default_32bit = false;
+            REX86_CHECK_EQ(context, rig.cpu.Run(1).steps, std::uint64_t{1});
+            REX86_CHECK_EQ(context, rig.cpu.state().eip, kCode + 18);
+            REX86_CHECK_EQ(context, rig.cpu.state().Get(Gpr::kEcx), 1u);
         }
         // The budget runs out between iterations: the completed ones are
         // architectural and EIP stays at the instruction; the next Run

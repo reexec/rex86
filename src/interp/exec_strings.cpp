@@ -284,6 +284,10 @@ ExecStatus ExecuteStrings(Ctx* ctx, Event* stop_event)
              (budget->attention != nullptr &&
               budget->attention->load(std::memory_order_relaxed))))
         {
+            if (budget->partial != nullptr && budget->partial != &ctx->decoded)
+            {
+                *budget->partial = ctx->decoded;
+            }
             return ExecStatus::kPartial;
         }
     }

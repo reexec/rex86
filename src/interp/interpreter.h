@@ -126,6 +126,15 @@ struct BlockLimits
     // Return right after an instruction that transferred control, so that
     // the Cpu loop sees every block head (design #44: translation on).
     bool stop_after_branch = false;
+    // A REP string that stopped between iterations continues from this
+    // decode, its first step not fetched again: a boundary the emulator
+    // makes (budget, stop request, translation) must not change what the
+    // instruction is, even when its iterations overwrote its own bytes
+    // (design #50, decision 1). Null otherwise.
+    const decode::DecodedInstruction* resume = nullptr;
+    // Where a REP string stopping between iterations copies its decode,
+    // for the next block's resume. Null keeps no copy.
+    decode::DecodedInstruction* partial = nullptr;
 };
 
 struct BlockResult
