@@ -104,6 +104,10 @@ flowchart TD
 
 *Architectural results: the integer, x87 and SIMD host comparison fuzz, every trace corpus and the 1.74M SST tests pass unchanged; running a REP in steps must end in the state running it at once does. Unit tests pin that equivalence: the same REP (MOVS, STOS, LODS, CMPS, SCAS, INS, OUTS; 16- and 32-bit addressing; DF 0 and 1; REPE/REPNE ending early) run in budgets of 1, 2, 7 and so on must equal one uninterrupted run. Performance: the path of instructions other than REP strings gains only one pointer copied into `Ctx`, and the benchmark's `alu`, `memory` and `call` must stay within the noise; each iteration gains a relaxed load and a compare, so `string` is measured before and after in steps.*
 
+**#50 보완**: 이 동등성은 REP의 반복이 자기 바이트를 덮어쓸 때 깨져 있었다. 재개할 때 명령을 메모리에서 다시 가져와 디코드했기 때문이다. #50부터 `kPartial`로 끊긴 REP는 시작할 때의 디코드로 이어 간다. 인터럽트 처리기나 호스트의 폴트 처리를 거친 재실행은 지금처럼 다시 가져온다([#50 설계](20261011-i050-rep-resume-and-wasm-campaign.md) 결정 1).
+
+*#50 addendum: this equivalence was broken when a REP's iterations overwrote its own bytes, resuming fetched and decoded the instruction again; from #50 a REP stopped `kPartial` continues from the decode it started with, while re-execution after an interrupt handler or the host's fault handling fetches again as before (#50 design, decision 1).*
+
 ## 소비자 영향 / Consumer impact
 
 * 지금은 없다. 두 소비자는 아직 rex86을 링크하지 않는다(결정 4).

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 
+#include "decode/decoder.h"
 #include "interp/decode_cache.h"
 #include "interp/interpreter.h"
 #include "translate/ir/frontend.h"
@@ -368,6 +369,19 @@ Event Cpu::RunUntilStop(std::uint64_t step_budget)
                 interpret_next_ = false;
             }
         }
+        // A REP string stopped between iterations goes on as it was decoded
+        // when nothing ran since and the host left CS:EIP and the mode as
+        // they were (design #50, decision 1).
+        if (!partial_decode_)
+        {
+            partial_decode_ = std::make_unique<decode::DecodedInstruction>();
+        }
+        limits.partial = partial_decode_.get();
+        if (in_progress_ && LinearEip() == in_progress_linear_ &&
+            state_.Seg(Segment::kCs).default_32bit == partial_32bit_)
+        {
+            limits.resume = partial_decode_.get();
+        }
         const interp::BlockResult block =
             interp::RunBlock(state_, *memory_, *environment_, features_, decode_cache_.get(), limits);
         steps += block.steps;
@@ -378,6 +392,7 @@ Event Cpu::RunUntilStop(std::uint64_t step_budget)
         if (in_progress_)
         {
             in_progress_linear_ = LinearEip();
+            partial_32bit_ = state_.Seg(Segment::kCs).default_32bit;
             continue;
         }
         if (block.last.status != interp::StepStatus::kRetired)

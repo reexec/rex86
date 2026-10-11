@@ -292,6 +292,12 @@ jobs:
         with:
           version: 3.1.74
           actions-cache-folder: emsdk-cache
+      # Node 24, as the browsers job: under the runner's Node 20 the IR
+      # differential's hundreds of thousands of generated modules grow each
+      # process past 2 GB, and four shards exhaust the runner (#50).
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y ninja-build
       - name: Build

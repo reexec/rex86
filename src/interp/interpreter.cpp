@@ -1010,9 +1010,53 @@ StepResult Step(CpuState& state, GuestMemory& memory,
 namespace
 {
 
+// Counts the step that just ran and says whether the block goes on.
+template <bool kStopAfterBranch>
+inline bool ContinueBlock(BlockResult& block, StepBudget& budget, const CpuState& state,
+                          const BlockLimits& limits)
+{
+    // An instruction that retires counts one step here; a string
+    // instruction has added its other iterations, and those a fault, a
+    // declined port or a partial run left behind (design #32).
+    const StepStatus status = block.last.status;
+    if (status != StepStatus::kRetired)
+    {
+        if (status == StepStatus::kRetiredAndStopped)
+        {
+            ++budget.used;
+        }
+        return false;
+    }
+    ++budget.used;
+    if (budget.used >= budget.limit ||
+        limits.attention->load(std::memory_order_relaxed))
+    {
+        return false;
+    }
+    if constexpr (kStopAfterBranch)
+    {
+        if (block.last.branched)
+        {
+            return false;
+        }
+    }
+    if (limits.gates != nullptr)
+    {
+        const SegmentRegister& cs = state.Seg(Segment::kCs);
+        const std::uint32_t linear =
+            cs.base + (state.eip & (cs.default_32bit ? 0xFFFFFFFFu : 0xFFFFu));
+        if (limits.gates->MayContain(linear))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 // The block loop. The version that stops after a branch is a separate
 // instantiation so that the one serving the interpreter alone compiles to
-// the loop measured in designs #35 and #32.
+// the loop measured in designs #35 and #32. A resumed REP string runs its
+// first step before the loop, so the loop itself is unchanged (design #50).
 template <bool kStopAfterBranch>
 BlockResult RunBlockLoop(CpuState& state, GuestMemory& memory, Environment& environment,
                          const Features& features, DecodeCache* cache, const BlockLimits& limits)
@@ -1021,49 +1065,27 @@ BlockResult RunBlockLoop(CpuState& state, GuestMemory& memory, Environment& envi
     StepBudget budget;
     budget.limit = limits.max_steps;
     budget.attention = limits.attention;
+    budget.partial = limits.partial;
     block.last.budget = &budget;
-    while (true)
+    bool more = true;
+    if (limits.resume != nullptr)
+    {
+        block.last.inhibit_interrupts = false;
+        if constexpr (kStopAfterBranch)
+        {
+            block.last.branched = false;
+        }
+        ExecuteDecoded(block.last, state, memory, environment, features, *limits.resume);
+        more = ContinueBlock<kStopAfterBranch>(block, budget, state, limits);
+    }
+    while (more)
     {
         if constexpr (kStopAfterBranch)
         {
             block.last.branched = false;
         }
         StepOne(block.last, state, memory, environment, features, cache);
-        // An instruction that retires counts one step here; a string
-        // instruction has added its other iterations, and those a fault, a
-        // declined port or a partial run left behind (design #32).
-        const StepStatus status = block.last.status;
-        if (status != StepStatus::kRetired)
-        {
-            if (status == StepStatus::kRetiredAndStopped)
-            {
-                ++budget.used;
-            }
-            break;
-        }
-        ++budget.used;
-        if (budget.used >= budget.limit ||
-            limits.attention->load(std::memory_order_relaxed))
-        {
-            break;
-        }
-        if constexpr (kStopAfterBranch)
-        {
-            if (block.last.branched)
-            {
-                break;
-            }
-        }
-        if (limits.gates != nullptr)
-        {
-            const SegmentRegister& cs = state.Seg(Segment::kCs);
-            const std::uint32_t linear =
-                cs.base + (state.eip & (cs.default_32bit ? 0xFFFFFFFFu : 0xFFFFu));
-            if (limits.gates->MayContain(linear))
-            {
-                break;
-            }
-        }
+        more = ContinueBlock<kStopAfterBranch>(block, budget, state, limits);
     }
     block.last.budget = nullptr;
     block.steps = budget.used;

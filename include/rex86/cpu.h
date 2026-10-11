@@ -20,6 +20,11 @@
 namespace rex86
 {
 
+namespace decode
+{
+struct DecodedInstruction;
+}
+
 namespace interp
 {
 class DecodeCache;
@@ -187,6 +192,10 @@ public:
     // True while CS:EIP addresses a REP string stopped between iterations:
     // the next Run continues it, without a gate check at its address. A
     // host running one whole instruction repeats Step while this holds.
+    // The instruction continues as it was decoded when it started, even if
+    // its own iterations or the host have rewritten its bytes since: a stop
+    // at the budget or on request must not change what runs (design #50).
+    // A host that wants the bytes fetched again moves EIP or CS first.
     [[nodiscard]] bool InstructionInProgress() const;
     // Asks a Run on another host thread to return kStopRequested at its next
     // instruction boundary or REP string iteration boundary.
@@ -257,6 +266,10 @@ private:
     // (design #32); its gate was checked when it started.
     bool in_progress_ = false;
     std::uint32_t in_progress_linear_ = 0;
+    // That REP string's decode and CS's mode when it was decoded, from
+    // which it resumes (design #50); made the first time a block runs.
+    std::unique_ptr<decode::DecodedInstruction> partial_decode_;
+    bool partial_32bit_ = false;
     // Set for one boundary after MOV SS, POP SS or an IF-enabling STI.
     bool interrupt_shadow_ = false;
 };

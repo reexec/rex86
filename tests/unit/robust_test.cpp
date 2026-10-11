@@ -62,6 +62,18 @@ void RunRobustTests(rex86::test::Context& context)
         }
         REX86_CHECK(context, result.ok);
     }
+    // Seeds the campaigns found. 2200826386: a REP STOSD its own iterations
+    // overwrite, split by translation's single interpreted step, resumed as
+    // other bytes (I8, #50).
+    for (const std::uint64_t seed : {std::uint64_t{2200826386}})
+    {
+        const CaseResult result = rex86::robust::RunCaseTwice([seed] { return Random(seed); });
+        if (!result.ok)
+        {
+            context.Fail("seed " + std::to_string(seed) + ": " + result.failure, __FILE__, __LINE__);
+        }
+        REX86_CHECK(context, result.ok);
+    }
     // The decoder round keeps its contract.
     {
         Random random(99);
