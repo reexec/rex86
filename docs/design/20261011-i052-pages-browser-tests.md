@@ -30,8 +30,7 @@
 /                    루트: 최신 tag의 tests/host/web/pages/ / root: the newest tag's tests/host/web/pages/
   index.html         버전 목록 / the version list
   compare.html       두 버전 벤치마크 비교 / the two-version benchmark comparison
-  compare.js
-  report.mjs         루트가 쓰는 보고 함수(최신 tag의 사본) / the root's report functions (the newest tag's copy)
+  compare.js         비교 실행과 판정(버전 디렉터리의 report.mjs에 기대지 않음) / runs and judges the comparison (relies on no version directory's report.mjs)
   versions.json      배포된 버전 목록 / the deployed versions
   .nojekyll
   v0.0.23/           그 tag의 실행기와 빌드 / that tag's runner and build
@@ -80,9 +79,9 @@ flowchart TD
 
 ### 크기 예산 / Size budget
 
-GitHub Pages 사이트의 권장 한도는 1 GB다([GitHub 문서](https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits)). 버전 디렉터리 하나의 크기는 **미확정**이다. 구현에서 v0.0.23으로 재서 작업 로그에 적는다. 워크플로는 배포 뒤 사이트 전체 크기를 작업 요약에 적는다. 합이 500 MB를 넘으면 가장 오래된 버전부터 지워 500 MB 아래로 맞추고, `versions.json`에서도 뺀다. 지운 버전은 그 tag로 다시 배포할 수 있다.
+GitHub Pages 사이트의 권장 한도는 1 GB다([GitHub 문서](https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits)). 버전 디렉터리 하나는 **9.4 MB**다(확인됨: 0.0.23 소스의 Windows 빌드, 도구 일곱의 `.js`와 `.wasm`, trace 묶음 포함, [로그](../work-logs/20261011-i052-pages-browser-tests.md)). 그래서 500 MB에 50개 남짓이 들어간다. 워크플로는 배포 뒤 사이트 전체 크기를 작업 요약에 적는다. 합이 500 MB를 넘으면 가장 오래된 버전부터 지워 500 MB 아래로 맞추고, `versions.json`에서도 뺀다. 지운 버전은 그 tag로 다시 배포할 수 있다.
 
-*GitHub Pages recommends sites under 1 GB (GitHub docs). One version directory's size is unresolved, to be measured on v0.0.23 during implementation and recorded in the work log. The workflow writes the whole site's size to the job summary; past 500 MB it removes the oldest versions until under 500 MB, dropping them from `versions.json` too, any of them redeployable from its tag.*
+*GitHub Pages recommends sites under 1 GB (GitHub docs). One version directory takes **9.4 MB** (confirmed: a Windows build of the 0.0.23 source, the seven tools' `.js` and `.wasm` with the trace corpus, log), so some fifty fit in 500 MB. The workflow writes the whole site's size to the job summary; past 500 MB it removes the oldest versions until under 500 MB, dropping them from `versions.json` too, any of them redeployable from its tag.*
 
 ## 결정 3: 루트의 버전 목록 / Decision 3: the root's version list
 
@@ -114,7 +113,7 @@ sequenceDiagram
     participant P as compare.js (루트)
     participant A as vA/worker.js
     participant B as vB/worker.js
-    loop 라운드 r = 1..N (기본 3)
+    loop 라운드 r = 1..N (기본 5)
         loop 엔진 e (기본 interpreter, wasm)
             Note over P: 홀수 라운드는 A→B, 짝수 라운드는 B→A
             P->>A: new Worker(vA/worker.js?tool=rex86_bench&args=[--engine,e])
@@ -126,15 +125,17 @@ sequenceDiagram
     P->>P: 워크로드×엔진마다 중앙값 A, B와 B/A
 ```
 
-* **입력**: 버전 A와 B(`versions.json`의 목록, 기본은 바로 아래 버전과 최신), 엔진(interpreter와 wasm은 켜고 evaluator는 끈다), 라운드 수(1~5, 기본 3). 시작 버튼을 눌러야 돈다. 휴대폰에서 실수로 오래 도는 일을 막기 위해서다.
+* **입력**: 버전 A와 B(`versions.json`의 목록, 기본은 바로 아래 버전과 최신), 엔진(interpreter와 wasm은 켜고 evaluator는 끈다), 라운드 수(1~7, 기본 5). 시작 버튼을 눌러야 돈다. 휴대폰에서 실수로 오래 도는 일을 막기 위해서다.
 * **순서**: 라운드마다 앞서는 버전을 바꾼다(ABBA). 휴대폰이 달아오르며 느려지는 영향이 한 버전에 몰리지 않게 하기 위해서다. 실행 사이에는 2초를 기다린다. 벤치마크의 wasm 실행은 모듈을 수십 개만 만든다. 그래서 #48의 Firefox 모듈 수 한도(1만 6천 개 남짓)와는 거리가 멀다.
 * **실행**: 각 버전의 `worker.js`를 그 디렉터리 경로로 띄운다. Worker 안의 `bin/` 상대 경로는 Worker 스크립트 주소를 기준으로 풀리므로, 각 버전은 자기 빌드를 읽는다. 루트는 출력을 읽기만 한다.
 * **확인**: 출력의 `[rex86-bench] version=` 값이 고른 버전과 다르면 그 실행을 실패로 센다. 이전 배포가 캐시에 남은 경우를 잡기 위해서다. `verified=fail`인 워크로드도 실패다. `engine_available=false`(그 버전에 그 엔진이 없음)는 "—"로 보인다.
-* **표시**: 엔진마다 표를 하나 둔다. 행은 워크로드이고, 열은 A 중앙값, B 중앙값, B/A다. B/A가 1.05 이상이면 개선 색, 0.95 이하이면 후퇴 색을 쓴다. 이 경계는 #27의 반복 측정 변동(몇 %)을 넘는 차이만 표시하려는 것이다. 판정이 아니라 눈으로 보기 위한 표시다. 각 실행의 값은 접힌 상세에 둔다.
-* **보고**: #48과 같은 보고 칸과 **Copy report**를 둔다. 줄은 `[rex86-compare] user_agent="..."`, `[rex86-compare] a=0.0.23 b=0.0.24 engine=wasm workload=alu a_mips=... b_mips=... ratio=... runs=3`, `[rex86-compare] result=ok|fail`이다. 이 줄을 기록 5절에 더한다.
+* **표시**: 엔진마다 표를 하나 둔다. 행은 워크로드이고, 열은 A 중앙값, B 중앙값, B/A다. 실행은 버전이 아니라 쪽(A, B)으로 나눈다. 그래서 같은 버전을 A와 B에 두면 그 기기의 측정 변동이 보인다. B/A가 1.05 이상이거나 0.95 이하이고, **A와 B의 실행값 범위가 겹치지 않을 때만** 개선 또는 후퇴 색을 쓴다. 판정이 아니라 눈으로 보기 위한 표시다. 각 실행의 값은 행의 툴팁과 보고 줄(`a_runs=`, `b_runs=`, `separate=`)에 남는다.
+  * **확인됨**(호스트 D와 같은 AMD Ryzen 5 5600X, Windows 11, 헤드리스 Chromium 153과 Firefox 155, 2026-10-11): v0.0.23을 자기 자신과 기본 설정(20프레임, 3라운드)으로 비교하면 중앙값의 B/A가 Chromium wasm alu 0.862, memory 0.937, Firefox interpreter x87 0.923, memory 0.932, wasm x87 1.058이었다. 같은 빌드인데도 ±5% 경계를 넘는다. 그래서 경계만으로 색을 칠하면 변화가 없는데도 표시된다. 범위가 겹치지 않는다는 조건을 더한 근거다. 첫 A/A에서는 24행 가운데 5행이 ±5%를 넘었다. 조건을 더해 다시 돌린 A/A에서는 7행이 넘었고, 그 가운데 6행은 범위가 겹쳐 표시되지 않았다. 1행(Chromium interpreter mixed 0.944)은 범위가 갈라져 거짓으로 표시되었다([로그](../work-logs/20261011-i052-pages-browser-tests.md)).
+  * **계산**: 변화가 없고 두 쪽의 실행이 서로 바꿔도 같은 분포라면, 쪽마다 n개의 값이 완전히 갈라질 확률은 2/C(2n, n)이다. n = 3이면 10%, n = 5이면 0.8%다. 그래서 기본 라운드를 5로 둔다. 휴대폰에서는 기본 엔진 둘에 실행이 20번이 된다. 5라운드로 다시 돌린 A/A에서는 4행이 ±5%를 넘었지만 범위가 갈라진 행이 없어, 표시된 행이 0이었다.
+* **보고**: #48과 같은 보고 칸과 **Copy report**를 둔다. 줄은 `[rex86-compare] user_agent="..."`, 설정 줄(`a= b= engines= rounds= frames=`), 실행마다 `run round= side= version= engine= result=`, 워크로드마다 `engine= workload= a_mips= b_mips= ratio= runs= separate= a_runs= b_runs=`, 끝으로 `result=ok|fail`이다. 이 줄을 기록 5절에 더한다.
 * 결과는 페이지에만 남는다. 서버로 보내지 않고 저장하지도 않는다. 기기 정보(모델, 전원)는 사람이 보고와 함께 적는다.
 
-*Inputs: versions A and B (from `versions.json`, defaulting to the one below the newest and the newest), engines (interpreter and wasm on, evaluator off) and rounds (1 to 5, default 3); nothing runs until the start button, so a phone does not start a long run by accident. Each round swaps which version goes first (ABBA), so a phone heating up and slowing does not land on one version; runs are 2 seconds apart, the benchmark's wasm runs making a few dozen modules, far from Firefox's limit of some 16,000 (#48). Each version's `worker.js` starts at its directory's path; a Worker resolves `bin/` against its script's address, so each version reads its own build and the root only reads output. A run whose `[rex86-bench] version=` differs from the chosen version counts as failed, catching an earlier deployment left in a cache; a `verified=fail` workload fails too, and `engine_available=false` (the version lacks the engine) shows as a dash. One table per engine, workloads as rows, A's median, B's median and B/A as columns, colored as an improvement at 1.05 or more and a regression at 0.95 or less, a bound meant to mark only differences beyond #27's run-to-run variation (a few percent), a visual aid rather than a verdict; each run's figures sit in a collapsed detail. A report box and **Copy report** as in #48 give `[rex86-compare]` lines (user agent, one line per engine and workload with both medians, the ratio and the run count, and a result line) to add to record section 5. Results stay on the page, neither sent anywhere nor stored; the person adds the device details (model, power) with the report.*
+*Inputs: versions A and B (from `versions.json`, defaulting to the one below the newest and the newest), engines (interpreter and wasm on, evaluator off) and rounds (1 to 7, default 5); nothing runs until the start button, so a phone does not start a long run by accident. Each round swaps which version goes first (ABBA), so a phone heating up and slowing does not land on one version; runs are 2 seconds apart, the benchmark's wasm runs making a few dozen modules, far from Firefox's limit of some 16,000 (#48). Each version's `worker.js` starts at its directory's path; a Worker resolves `bin/` against its script's address, so each version reads its own build and the root only reads output. A run whose `[rex86-bench] version=` differs from the chosen version counts as failed, catching an earlier deployment left in a cache; a `verified=fail` workload fails too, and `engine_available=false` (the version lacks the engine) shows as a dash. One table per engine, workloads as rows, A's median, B's median and B/A as columns; runs are told apart by side (A, B) rather than version, so one version on both sides shows the device's variation. B/A is colored as an improvement or regression only at 1.05 or more or 0.95 or less **and when the two sides' runs do not overlap**, a visual aid rather than a verdict; each run's figures sit in the row's tooltip and the report (`a_runs=`, `b_runs=`, `separate=`). Confirmed (an AMD Ryzen 5 5600X like host D, Windows 11, headless Chromium 153 and Firefox 155, 2026-10-11): v0.0.23 against itself at the defaults (20 frames, 3 rounds) gave median ratios of 0.862 (Chromium wasm alu), 0.937 (memory), 0.923 and 0.932 (Firefox interpreter x87 and memory) and 1.058 (Firefox wasm x87), past the ±5% bound with one build, so the bound alone would mark changes that are not there; that grounds the overlap condition. Five of the first A/A's 24 rows passed ±5%; in a rerun with the condition seven did, six of them overlapping and going unmarked while one (Chromium interpreter mixed, 0.944) separated and was marked falsely (log). Computed: with no change and the two sides' runs exchangeable, n values per side separate completely with probability 2/C(2n, n), 10% at n = 3 and 0.8% at n = 5, so the default is five rounds, twenty runs on a phone with the two default engines. A five-round A/A rerun had four rows past ±5%, none separated, and nothing marked. A report box and **Copy report** as in #48 give `[rex86-compare]` lines (user agent, one line per engine and workload with both medians, the ratio and the run count, and a result line) to add to record section 5. Results stay on the page, neither sent anywhere nor stored; the person adds the device details (model, power) with the report.*
 
 ### 루트와 버전 디렉터리 사이의 계약 / The contract between the root and version directories
 
@@ -154,16 +155,16 @@ sequenceDiagram
 
 ## 결정 5: 검증 / Decision 5: verification
 
-* **로컬**: `serve.mjs`에 사이트 디렉터리를 그대로 내주는 모드(`--site <디렉터리>`)를 더한다. 버전 디렉터리 둘(같은 빌드를 두 이름으로 둔 것)과 루트를 조립해 띄우고, Playwright로 다음을 확인한다.
-  * 버전 목록이 보인다.
-  * 벤치마크 링크가 돈다.
-  * 비교가 끝나고 `[rex86-compare] result=ok`가 나온다.
-  * 버전 이름이 출력의 `version=`과 다르면 실패로 센다.
-* 조립 스크립트 `scripts/pages_site.sh`를 워크플로와 로컬 검증이 함께 쓴다. 인자는 사이트 디렉터리, 버전, 빌드 `bin/`, 실행기 디렉터리, 루트 디렉터리(선택)다.
-* **CI**: CI `browsers` 작업에 위 비교 smoke를 더한다. 이 작업은 이미 브라우저용 빌드가 있으므로, 같은 빌드를 두 버전 이름으로 조립해 Chromium에서 `compare.html?rounds=1&frames=2`를 돌린다. 라운드와 프레임은 smoke용 쿼리다. `frames`는 `rex86_bench --frames`로 넘긴다.
+* **로컬**: `serve.mjs`에 사이트 디렉터리를 그대로 내주는 모드(`--site <디렉터리>`)를 더한다. 같은 빌드를 제 버전 이름과, 빌드가 보고하지 않는 버전 이름(`0.0.1`) 두 곳에 조립하고 루트와 함께 띄운다. Playwright 드라이버 `tests/host/web/drive_pages.mjs`가 다음을 확인한다.
+  * 버전 목록이 모든 버전을 보인다.
+  * 버전 페이지의 벤치마크 smoke가 그 디렉터리에서 돈다.
+  * 제 버전끼리의 비교는 `[rex86-compare] result=ok`로 끝난다.
+  * `0.0.1`과의 비교는 버전 확인 때문에 `result=fail`로 끝난다(`--expect fail`).
+* 조립 스크립트 `scripts/pages_site.mjs`(Node)를 워크플로와 로컬, CI 검증이 함께 쓴다. 인자는 사이트 디렉터리, 버전, 빌드 `bin/`, 실행기 디렉터리, 루트 디렉터리와 루트 버전(선택), 예산이다. 셸과 `jq` 대신 Node로 쓴 것은 Windows 개발 기계와 CI에서 같은 스크립트를 돌리기 위해서다.
+* **CI**: CI `browsers` 작업에 위 확인을 더한다. 이 작업은 이미 브라우저용 빌드가 있다. Chromium에서 `compare.html?rounds=1&frames=2`로 돈다. 라운드와 프레임은 smoke용 쿼리이고, `frames`는 `rex86_bench --frames`로 넘긴다.
 * **배포 뒤**: tag push 뒤 Pages 주소에서 데스크톱 Chromium으로 목록, 벤치마크, 비교를 한 번 연다. 실기기 결과는 사용자가 돌린 뒤 기록 5절에 더한다.
 
-*Locally, `serve.mjs` gains a mode serving a site directory as is (`--site <dir>`); a root and two version directories (one build under two names) are assembled and served, and Playwright checks that the version list shows, a benchmark link runs, and a comparison finishes with `[rex86-compare] result=ok`, a version name differing from the output's `version=` counting as a failure. The assembly script `scripts/pages_site.sh` (site directory, version, the build's `bin/`, the runner directory and optionally the root directory) is shared by the workflow and local verification. In CI the `browsers` job, which already has a browser build, adds this comparison smoke, assembling one build under two version names and running `compare.html?rounds=1&frames=2` in Chromium; rounds and frames are smoke queries, `frames` passed on as `rex86_bench --frames`. After deployment, the Pages address is opened once in desktop Chromium for the list, a benchmark and a comparison; real-device results join record section 5 once the user has run them.*
+*Locally, `serve.mjs` gains a mode serving a site directory as is (`--site <dir>`); one build is assembled under its own version and under one it does not report (`0.0.1`), served with the root, and the Playwright driver `tests/host/web/drive_pages.mjs` checks that the version list shows every version, that a version page's benchmark smoke runs from its directory, that comparing the build's own version with itself ends with `[rex86-compare] result=ok`, and that comparing with `0.0.1` ends with `result=fail` for the version check (`--expect fail`). The assembly script `scripts/pages_site.mjs` (site directory, version, the build's `bin/`, the runner directory, optionally the root directory and root version, the budget) is shared by the workflow, local and CI verification, written in Node rather than shell and `jq` so the same script runs on a Windows development machine and in CI. CI's `browsers` job, which already has a browser build, adds these checks in Chromium with `compare.html?rounds=1&frames=2`, smoke queries, `frames` passed on as `rex86_bench --frames`. After deployment, the Pages address is opened once in desktop Chromium for the list, a benchmark and a comparison; real-device results join record section 5 once the user has run them.*
 
 ## 소비자 영향 / Consumer impact
 

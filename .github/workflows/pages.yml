@@ -1,0 +1,111 @@
+name: pages
+
+# Deploys the versioned browser tests to GitHub Pages (design #52): a tag
+# push builds that tag for browsers and adds it as /vX.Y.Z/ beside the
+# versions already on the gh-pages branch. A dispatch with `version` builds
+# that tag instead (backfilling a release); the root (the version list and
+# the comparison) comes from the run's own ref and changes only when that ref
+# is a tag at least as high as every deployed version. gh-pages is pushed as
+# a single orphan commit each time, so binaries do not pile up in history.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release to deploy, X.Y.Z (0.0.23 or later); empty deploys the run ref, which must be a tag'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: ref
+      - name: Resolve the version
+        id: resolve
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then root_version="${GITHUB_REF_NAME#v}"; else root_version=''; fi
+          version="${INPUT_VERSION:-$root_version}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::no release to deploy: give version=X.Y.Z or run on a v* tag (got '$version')"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "root_version=$root_version" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        with:
+          ref: v${{ steps.resolve.outputs.version }}
+          path: src
+          persist-credentials: false
+      - name: Check the release has the browser runner
+        run: |
+          if [ ! -f src/tests/host/web/worker.js ]; then
+            echo "::error::v${{ steps.resolve.outputs.version }} has no browser runner (tests/host/web/worker.js); releases before 0.0.23 cannot be deployed"
+            exit 1
+          fi
+      - uses: mymindstorm/setup-emsdk@v16
+        with:
+          version: 3.1.74
+          actions-cache-folder: emsdk-cache
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Build
+        working-directory: src
+        run: |
+          emcmake cmake -S . -B build/web-browser-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DREX86_BROWSER=ON
+          cmake --build build/web-browser-release
+      - name: Fetch the deployed site
+        working-directory: ref
+        run: |
+          mkdir ../site
+          if git ls-remote --exit-code --heads origin gh-pages > /dev/null; then
+            git fetch --depth 1 origin gh-pages
+            git archive FETCH_HEAD | tar -x -C ../site
+          fi
+      - name: Assemble
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+          ROOT_VERSION: ${{ steps.resolve.outputs.root_version }}
+        run: |
+          root=()
+          if [ -n "$ROOT_VERSION" ]; then root=(--root ref/tests/host/web/pages --root-version "$ROOT_VERSION"); fi
+          node ref/scripts/pages_site.mjs --site site --version "$VERSION" \
+            --bin src/build/web-browser-release/bin --runner src/tests/host/web \
+            --commit "$(git -C src rev-parse HEAD)" --date "$(git -C src log -1 --format=%cI)" \
+            "${root[@]}" | tee assemble.log
+          {
+            echo "## Pages"
+            echo
+            echo '```'
+            cat assemble.log
+            echo '```'
+            echo
+            echo "https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish
+        working-directory: site
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git init -q -b gh-pages
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -q -m "Deploy v$VERSION (#52)"
+          git push --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages

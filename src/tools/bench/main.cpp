@@ -3,6 +3,11 @@
 // distribution, time to first frame and the real-time ratio against the
 // target boards' reference CPUs, as [rex86-bench] key=value lines.
 //
+// The Pages site's comparison (design #52, decision 4) reads every deployed
+// version's output with one parser, so these lines are a contract: "version=",
+// "workload=<name> ... mips=<value> ... verified=ok", "workload=<name>
+// verified=fail" and "engine=<name> engine_available=false".
+//
 // Usage: rex86_bench [--frames N] [--budget N] [--ipc X] [--only a,b]
 //                    [--engine interpreter|evaluator|wasm] [--smoke] [--dump <dir>]
 

@@ -80,6 +80,6 @@ Emscripten 테스트 도구를 실제 브라우저에서 돌린 결과다. 대�
 
 ## 5. 실기기 / Real devices
 
-**미확정**: 사용자가 [가이드](../guides/browser-tests.md) 3절의 절차로 돌린 뒤, 기기(모델, OS, 브라우저 버전, 전원)와 보고 줄, 벤치마크 세 번의 중앙값을 여기에 더한다. README 목표 3의 실용 기준(중급 모바일 브라우저)의 첫 근거가 된다.
+**미확정**: 사용자가 [가이드](../guides/browser-tests.md) 3절의 절차로 돌린 뒤, 기기(모델, OS, 브라우저 버전, 전원)와 보고 줄, 벤치마크 세 번의 중앙값을 여기에 더한다. README 목표 3의 실용 기준(중급 모바일 브라우저)의 첫 근거가 된다. #52부터 릴리스별 페이지가 GitHub Pages(<https://reexec.github.io/rex86/>)에 있어 빌드 없이 열 수 있다. 같은 기기에서 두 버전을 비교한 `[rex86-compare]` 줄도 여기에 더한다([가이드](../guides/browser-tests.md) 4절).
 
-*Unresolved: once the user runs the guide's section 3 procedure, the device (model, OS, browser version, power), the report lines and the medians of three benchmark runs go here, the first evidence for README goal 3's practical bar (a mid-range mobile browser).*
+*Unresolved: once the user runs the guide's section 3 procedure, the device (model, OS, browser version, power), the report lines and the medians of three benchmark runs go here, the first evidence for README goal 3's practical bar (a mid-range mobile browser). From #52 each release's page is on GitHub Pages (https://reexec.github.io/rex86/), opened without a build, and `[rex86-compare]` lines comparing two versions on one device go here too (guide section 4).*
