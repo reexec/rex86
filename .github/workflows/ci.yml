@@ -219,3 +219,17 @@ jobs:
       - name: Test
         working-directory: tests/host/web
         run: node drive.mjs --bin ../../../build/web-browser-release/bin
+      # The Pages site (design #52): the build under its own version and under
+      # one it does not report; comparing the first with itself must pass and
+      # comparing the second must fail the version check.
+      - name: Pages site smoke
+        working-directory: tests/host/web
+        run: |
+          version="$(cat ../../../VERSION)"
+          site="$RUNNER_TEMP/pages-site"
+          bin=../../../build/web-browser-release/bin
+          node ../../../scripts/pages_site.mjs --site "$site" --version "$version" --bin "$bin" --runner . \
+            --root pages --root-version "$version"
+          node ../../../scripts/pages_site.mjs --site "$site" --version 0.0.1 --bin "$bin" --runner .
+          node drive_pages.mjs --site "$site" --compare "$version,$version" --expect ok
+          node drive_pages.mjs --site "$site" --compare "0.0.1,$version" --expect fail

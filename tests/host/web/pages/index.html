@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rex86 browser tests</title>
+<!-- The site root's version list (design #52, decision 3): one row per
+     deployed version from versions.json, linking its benchmark (the default
+     path on phones), its whole #48 suite and its release notes. -->
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1d1f23;
+    --muted: #5d6470;
+    --line: #d9dde3;
+    --link: #0b5cad;
+    --fail: #c62828;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181c;
+      --fg: #e6e8eb;
+      --muted: #9aa1ab;
+      --line: #33373e;
+      --link: #6cb0f5;
+      --fail: #ff6b6b;
+    }
+  }
+  body {
+    margin: 0 auto;
+    padding: 16px;
+    max-width: 720px;
+    background: var(--bg);
+    color: var(--fg);
+    font: 15px/1.5 system-ui, sans-serif;
+  }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p { margin: 0 0 12px; }
+  .muted { color: var(--muted); font-size: 13px; }
+  a { color: var(--link); }
+  .compare {
+    display: inline-block;
+    margin: 4px 0 16px;
+    padding: 8px 16px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    text-decoration: none;
+    font-weight: 600;
+  }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .version { font-weight: 600; font-size: 17px; }
+  .meta { color: var(--muted); font-size: 13px; margin-left: 6px; }
+  .links { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 4px; }
+  .error { color: var(--fail); font-weight: 600; }
+  footer { margin-top: 20px; }
+</style>
+</head>
+<body>
+<h1>rex86 browser tests</h1>
+<p class="muted">IA-32 CPU core in WebAssembly. Each version runs its own build of the test tools on synthetic code in this browser.</p>
+<a class="compare" id="compare" href="compare.html">Compare two versions</a>
+<p id="status" class="muted">loading versions</p>
+<ul id="versions"></ul>
+<footer class="muted">
+  <p><strong>Benchmark</strong> runs the interpreter and wasm translation (a few minutes on a phone; keep the screen on and the tab in front). <strong>Full suite</strong> adds the unit tests, IR differential, robustness, traces and probe (much longer).</p>
+  <p>Results: use <em>Copy report</em> on the page and add it with the device model, OS, browser and whether it was on power to
+    <a href="https://github.com/reexec/rex86/issues/52">issue #52</a>.
+    Procedure: <a href="https://github.com/reexec/rex86/blob/main/docs/guides/browser-tests.md">browser test guide</a>.</p>
+</footer>
+<script type="module">
+  const repo = 'https://github.com/reexec/rex86';
+  const state = { done: false, count: 0, error: null };
+  window.rex86Versions = state;
+
+  function link(text, href) {
+    const a = document.createElement('a');
+    a.textContent = text;
+    a.href = href;
+    return a;
+  }
+
+  try {
+    const response = await fetch('versions.json', { cache: 'no-store' });
+    if (!response.ok) {
+      throw new Error(`versions.json: HTTP ${response.status}`);
+    }
+    const versions = await response.json();
+    const list = document.getElementById('versions');
+    for (const { version, commit, date } of versions) {
+      const item = document.createElement('li');
+      const head = document.createElement('div');
+      const name = document.createElement('span');
+      name.className = 'version';
+      name.textContent = `v${version}`;
+      const meta = document.createElement('span');
+      meta.className = 'meta';
+      meta.textContent = [date?.slice(0, 10), commit?.slice(0, 7)].filter(Boolean).join(' · ');
+      head.append(name, meta);
+      const links = document.createElement('div');
+      links.className = 'links';
+      links.append(
+        link('Benchmark', `v${version}/index.html?only=bench-interpreter,bench-wasm`),
+        link('Full suite', `v${version}/index.html`),
+        link('Release notes', `${repo}/blob/v${version}/docs/release-notes/v${version}.md`));
+      item.append(head, links);
+      list.append(item);
+    }
+    const compare = document.getElementById('compare');
+    if (versions.length >= 2) {
+      compare.href = `compare.html?a=${versions[1].version}&b=${versions[0].version}`;
+    }
+    state.count = versions.length;
+    document.getElementById('status').textContent =
+      `${versions.length} version${versions.length === 1 ? '' : 's'}, newest first`;
+  } catch (error) {
+    state.error = String(error);
+    const status = document.getElementById('status');
+    status.textContent = `could not load the version list: ${error}`;
+    status.className = 'error';
+  }
+  state.done = true;
+</script>
+</body>
+</html>

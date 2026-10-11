@@ -4,8 +4,14 @@
 //
 //   node tests/host/web/serve.mjs <build>/bin [port]
 //
-// drive.mjs imports startServer. Nothing here is meant for an untrusted
-// network: it serves two directories read-only, without caching.
+// With --site it serves a site assembled by scripts/pages_site.mjs as is,
+// the way GitHub Pages does (design #52, decision 5):
+//
+//   node tests/host/web/serve.mjs --site <dir> [port]
+//
+// drive.mjs imports startServer and drive_pages.mjs startSiteServer. Nothing
+// here is meant for an untrusted network: it serves directories read-only,
+// without caching.
 
 import fs from 'node:fs';
 import http from 'node:http';
@@ -24,16 +30,24 @@ const types = {
   '.wasm': 'application/wasm',
 };
 
-// The file a request path names, or null when it leaves both directories.
-function resolve(binDir, requestPath) {
-  const [base, rest] = requestPath.startsWith('/bin/')
-    ? [binDir, requestPath.slice('/bin/'.length)]
-    : [webDir, requestPath === '/' ? 'index.html' : requestPath.slice(1)];
+// The file a request path names under mounts ([url prefix, directory],
+// longest prefix first), or null when it leaves them. A path ending in /
+// names that directory's index.html.
+function resolve(mounts, requestPath) {
+  const mount = mounts.find(([prefix]) => requestPath.startsWith(prefix));
+  if (!mount) {
+    return null;
+  }
+  const [prefix, base] = mount;
+  let rest = requestPath.slice(prefix.length);
+  if (rest === '' || rest.endsWith('/')) {
+    rest += 'index.html';
+  }
   const file = path.resolve(base, rest);
   return file.startsWith(path.resolve(base) + path.sep) ? file : null;
 }
 
-export function startServer(binDir, { port = 0, host = '127.0.0.1' } = {}) {
+function serve(mounts, { port = 0, host = '127.0.0.1' } = {}) {
   const server = http.createServer((request, response) => {
     let requestPath;
     try {
@@ -42,7 +56,7 @@ export function startServer(binDir, { port = 0, host = '127.0.0.1' } = {}) {
       response.writeHead(400).end();
       return;
     }
-    const file = resolve(binDir, requestPath);
+    const file = resolve(mounts, requestPath);
     if (file === null || (request.method !== 'GET' && request.method !== 'HEAD')) {
       response.writeHead(file === null ? 404 : 405).end();
       return;
@@ -65,15 +79,28 @@ export function startServer(binDir, { port = 0, host = '127.0.0.1' } = {}) {
   });
 }
 
+export function startServer(binDir, options) {
+  return serve([['/bin/', binDir], ['/', webDir]], options);
+}
+
+export function startSiteServer(siteDir, options) {
+  return serve([['/', siteDir]], options);
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const [binDir, port] = process.argv.slice(2);
-  if (!binDir || !fs.existsSync(path.join(binDir, 'rex86_browser.json'))) {
-    console.error('usage: node serve.mjs <REX86_BROWSER build>/bin [port]');
+  const args = process.argv.slice(2);
+  const site = args[0] === '--site';
+  const [dir, port] = site ? args.slice(1) : args;
+  const marker = site ? 'versions.json' : 'rex86_browser.json';
+  if (!dir || !fs.existsSync(path.join(dir, marker))) {
+    console.error('usage: node serve.mjs <REX86_BROWSER build>/bin [port]\n' +
+      '       node serve.mjs --site <site from scripts/pages_site.mjs> [port]');
     process.exit(2);
   }
-  const server = await startServer(path.resolve(binDir), { port: Number(port ?? 8048), host: '0.0.0.0' });
+  const options = { port: Number(port ?? 8048), host: '0.0.0.0' };
+  const server = await (site ? startSiteServer : startServer)(path.resolve(dir), options);
   const { port: bound } = server.address();
-  console.log(`[rex86-serve] serving ${path.resolve(binDir)} on port ${bound}`);
+  console.log(`[rex86-serve] serving ${path.resolve(dir)} on port ${bound}`);
   for (const addresses of Object.values(os.networkInterfaces())) {
     for (const address of addresses ?? []) {
       if (address.family === 'IPv4') {
