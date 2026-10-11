@@ -44,7 +44,7 @@
 
 ## 2026-10-11 (배포 뒤 / after deployment)
 
-- **배포**: v0.0.24 tag push의 `pages` 실행([38138784544](https://github.com/reexec/rex86/actions/runs/38138784544)와 같은 push, pages 실행 38138784549)이 성공했다. 사용자가 Pages 원본을 `gh-pages`로 정한 뒤, ref `v0.0.24`, `version=0.0.23`의 수동 실행(38142142340)으로 v0.0.23을 채워 넣었다. `versions.json`에 두 버전이 있다.
+- **배포**: v0.0.24 tag push의 `pages` 실행([38138784549](https://github.com/reexec/rex86/actions/runs/38138784549))이 성공했다. 사용자가 Pages 원본을 `gh-pages`로 정한 뒤, ref `v0.0.24`, `version=0.0.23`의 수동 실행([38142142340](https://github.com/reexec/rex86/actions/runs/38142142340))으로 v0.0.23을 채워 넣었다. `versions.json`에 두 버전이 있다.
 - **사용자의 비교 결과**(Windows, Edge 155.0, 기기 미상, A=0.0.23, B=0.0.24, interpreter와 wasm, 5라운드, 기본 프레임): `result=ok`. 12행 가운데 2행이 범위가 갈라졌다.
   - wasm call 1.083(A 101.2~117.9, B 121.8~132.2): 개선 색으로 표시되었다.
   - wasm memory 1.047(A 140.7~144.9, B 146.5~159.6): 범위는 갈라졌지만 5% 아래라 표시되지 않았다.
