@@ -60,6 +60,16 @@ struct TranslationOptions
     // The longest block, in instructions. A block runs only when the budget
     // covers it whole, so 1 lets single steps run translated (design #46).
     std::uint32_t max_block_instructions = 64;
+    // For kWasm (design #49): blocks installed together as one module, 1 to
+    // 64, and the block entries the oldest waiting block lets pass before a
+    // partial batch is installed anyway. Browsers limit modules, not
+    // functions (Firefox: about 16,000 per process).
+    std::uint32_t blocks_per_module = 16;
+    std::uint32_t batch_wait = 4096;
+    // For kWasm: live modules beyond which the oldest is evicted whole; 0
+    // for no budget. Evicted blocks run on the interpreter until translated
+    // again, so a working set beyond the budget keeps translating.
+    std::uint32_t max_modules = 4096;
 };
 
 // The translation every Cpu made afterwards starts with (process-wide), so
@@ -79,6 +89,10 @@ struct TranslationStats
     std::uint64_t interpreter_exits = 0;
     // Guest steps run inside translated blocks.
     std::uint64_t translated_steps = 0;
+    // Batches handed to the backend, and those the module budget evicted
+    // (design #49).
+    std::uint64_t modules_submitted = 0;
+    std::uint64_t modules_evicted = 0;
 };
 
 enum class Engine : std::uint8_t

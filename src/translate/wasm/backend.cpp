@@ -1,5 +1,6 @@
 #include "translate/wasm/backend.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <utility>
 
@@ -43,20 +44,36 @@ std::uint32_t CheckHelperIndex()
     return static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&CheckHelper));
 }
 
-CompileStatus WasmBackend::Compile(Translation* translation)
+WasmBackend::WasmBackend(WasmModuleServices* services, const std::uint32_t blocks_per_module)
+    : services_(services), batch_(std::clamp(blocks_per_module, 1u, kMaxBatchBlocks))
 {
-    const ir::Block* blocks[] = {&translation->block};
-    Bytes bytes = CompileModule(blocks, 1, CheckHelperIndex());
-    std::uint32_t index = 0;
-    const WasmInstall answer =
-        services_->Install(translation->ticket, bytes.data(), bytes.size(), 1, &index);
+}
+
+CompileStatus WasmBackend::Compile(Translation* const* translations, const std::uint32_t count,
+                                   const std::uint32_t ticket)
+{
+    if (count == 0 || count > kMaxBatchBlocks)
+    {
+        return CompileStatus::kFailed;
+    }
+    const ir::Block* blocks[kMaxBatchBlocks];
+    for (std::uint32_t i = 0; i < count; ++i)
+    {
+        blocks[i] = &translations[i]->block;
+    }
+    Bytes bytes = CompileModule(blocks, count, CheckHelperIndex());
+    std::uint32_t indices[kMaxBatchBlocks];
+    const WasmInstall answer = services_->Install(ticket, bytes.data(), bytes.size(), count, indices);
     switch (answer)
     {
         case WasmInstall::kInstalled:
-            translation->handle = index;
+            for (std::uint32_t i = 0; i < count; ++i)
+            {
+                translations[i]->handle = indices[i];
+            }
             return CompileStatus::kReady;
         case WasmInstall::kPending:
-            pending_bytes_[translation->ticket] = std::move(bytes);
+            pending_bytes_[ticket] = std::move(bytes);
             return CompileStatus::kPending;
         case WasmInstall::kFailed:
         default:

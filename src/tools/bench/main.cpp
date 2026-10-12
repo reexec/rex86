@@ -10,6 +10,9 @@
 //
 // Usage: rex86_bench [--frames N] [--budget N] [--ipc X] [--only a,b]
 //                    [--engine interpreter|evaluator|wasm] [--smoke] [--dump <dir>]
+//                    [--blocks-per-module N] [--batch-wait N] [--max-modules N]
+// The last three set the translation's batching and module budget (design
+// #49), defaulting to TranslationOptions' values.
 
 #if defined(REX86_HOST_WEB)
 #include "host/web/wasm_module_services.h"
@@ -76,7 +79,8 @@ void Usage()
 {
     std::fprintf(stderr,
                  "usage: rex86_bench [--frames N] [--budget N] [--ipc X] [--only a,b]\n"
-                 "                   [--engine interpreter|evaluator|wasm] [--smoke] [--dump <dir>]\n");
+                 "                   [--engine interpreter|evaluator|wasm] [--smoke] [--dump <dir>]\n"
+                 "                   [--blocks-per-module N] [--batch-wait N] [--max-modules N]\n");
 }
 
 std::vector<std::string> SplitCommas(const std::string& text)
@@ -205,6 +209,7 @@ int main(int argc, char** argv)
     std::string dump_directory;
     std::string engine = "interpreter";
     std::vector<std::string> only;
+    rex86::TranslationOptions translation;
 
     for (int i = 1; i < argc; ++i)
     {
@@ -237,6 +242,18 @@ int main(int argc, char** argv)
         else if (arg == "--dump" && has_value)
         {
             dump_directory = argv[++i];
+        }
+        else if (arg == "--blocks-per-module" && has_value)
+        {
+            translation.blocks_per_module = static_cast<std::uint32_t>(std::strtoul(argv[++i], nullptr, 0));
+        }
+        else if (arg == "--batch-wait" && has_value)
+        {
+            translation.batch_wait = static_cast<std::uint32_t>(std::strtoul(argv[++i], nullptr, 0));
+        }
+        else if (arg == "--max-modules" && has_value)
+        {
+            translation.max_modules = static_cast<std::uint32_t>(std::strtoul(argv[++i], nullptr, 0));
         }
         else
         {
@@ -279,7 +296,6 @@ int main(int argc, char** argv)
     // the IR evaluator (design #44). Any other request is refused
     // explicitly rather than measured as if it were there (design #27,
     // decision 6).
-    rex86::TranslationOptions translation;
 #if defined(REX86_HOST_WEB)
     rex86::host::web::WebWasmModuleServices wasm_services;
 #endif
@@ -312,6 +328,13 @@ int main(int argc, char** argv)
                     active == wanted ? "true" : "false",
                     smoke ? "smoke" : "measure", options.frames,
                     static_cast<unsigned long long>(options.frame_budget), options.ipc);
+        if (engine != "interpreter")
+        {
+            std::printf("[rex86-bench] translation threshold=%u blocks_per_module=%u "
+                        "batch_wait=%u max_modules=%u\n",
+                        translation.threshold, translation.blocks_per_module,
+                        translation.batch_wait, translation.max_modules);
+        }
     }
 
     bool ok = true;
@@ -350,8 +373,24 @@ int main(int argc, char** argv)
             }
             continue;
         }
+#if defined(REX86_HOST_WEB)
+        const std::uint64_t refused_before = wasm_services.failed();
+#endif
         const WorkloadResult result = rex86::bench::RunWorkload(image, workload, options);
         PrintResult(result, options);
+        if (engine != "interpreter" && result.verified)
+        {
+            std::uint64_t refused = 0;
+#if defined(REX86_HOST_WEB)
+            refused = wasm_services.failed() - refused_before;
+#endif
+            std::printf("[rex86-bench] workload=%s modules_submitted=%llu modules_evicted=%llu "
+                        "modules_refused=%llu\n",
+                        result.name.c_str(),
+                        static_cast<unsigned long long>(result.translation.modules_submitted),
+                        static_cast<unsigned long long>(result.translation.modules_evicted),
+                        static_cast<unsigned long long>(refused));
+        }
         std::fflush(stdout);
         ok = ok && result.verified;
     }
@@ -363,11 +402,14 @@ int main(int argc, char** argv)
 #if defined(REX86_HOST_WEB)
     if (engine == "wasm")
     {
-        std::printf("[rex86-bench] wasm modules_installed=%llu install_ms=%.3f install_us_per_module=%.1f\n",
+        const double installed = static_cast<double>(wasm_services.installed());
+        std::printf("[rex86-bench] wasm modules_installed=%llu install_ms=%.3f install_us_per_module=%.1f "
+                    "functions_per_module=%.1f bytes_per_module=%.0f modules_refused=%llu\n",
                     static_cast<unsigned long long>(wasm_services.installed()), wasm_services.install_ms(),
-                    wasm_services.installed() == 0
-                        ? 0.0
-                        : 1000.0 * wasm_services.install_ms() / static_cast<double>(wasm_services.installed()));
+                    installed == 0.0 ? 0.0 : 1000.0 * wasm_services.install_ms() / installed,
+                    installed == 0.0 ? 0.0 : static_cast<double>(wasm_services.installed_functions()) / installed,
+                    installed == 0.0 ? 0.0 : static_cast<double>(wasm_services.installed_bytes()) / installed,
+                    static_cast<unsigned long long>(wasm_services.failed()));
     }
 #endif
 

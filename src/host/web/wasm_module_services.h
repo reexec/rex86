@@ -25,13 +25,20 @@ public:
                         std::uint32_t export_count, std::uint32_t* table_indices) override;
     void Release(const std::uint32_t* table_indices, std::uint32_t count) override;
 
-    // Modules installed so far and the time they took, for the benchmark.
+    // Modules installed so far, their bytes and functions, the time they
+    // took, and the modules refused, for the benchmark.
     [[nodiscard]] std::uint64_t installed() const { return installed_; }
+    [[nodiscard]] std::uint64_t installed_bytes() const { return installed_bytes_; }
+    [[nodiscard]] std::uint64_t installed_functions() const { return installed_functions_; }
     [[nodiscard]] double install_ms() const { return install_ms_; }
+    [[nodiscard]] std::uint64_t failed() const { return failed_; }
 
 private:
     std::uint64_t installed_ = 0;
+    std::uint64_t installed_bytes_ = 0;
+    std::uint64_t installed_functions_ = 0;
     double install_ms_ = 0.0;
+    std::uint64_t failed_ = 0;
 };
 
 }  // namespace rex86::host::web

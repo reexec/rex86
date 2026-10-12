@@ -260,6 +260,7 @@ if(REX86_BUILD_TESTS)
         tests/unit/rep_budget_test.cpp
         tests/unit/ir_test.cpp
         tests/unit/translate_runtime_test.cpp
+        tests/unit/translate_batch_test.cpp
         tests/unit/wasm_backend_test.cpp
         src/tools/census/census.cpp
         src/tools/sst/moo_reader.cpp

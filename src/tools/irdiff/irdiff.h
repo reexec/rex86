@@ -26,6 +26,8 @@ struct Options
     // When given (a wasm32 build with the web adapter), every optimized block
     // also runs through the wasm backend and is compared (design #45).
     WasmModuleServices* wasm = nullptr;
+    // Blocks per generated module, 1 to 64 (design #49).
+    unsigned wasm_batch = 16;
 };
 
 struct Stats
@@ -38,6 +40,8 @@ struct Stats
     std::uint64_t mismatches = 0;
     // Blocks the wasm backend ran.
     std::uint64_t wasm_runs = 0;
+    // Modules the wasm comparisons installed.
+    std::uint64_t wasm_modules = 0;
     std::map<std::string, std::uint64_t> compared_by_mnemonic;
     // The first mismatch, for the report.
     std::string first_failure;

@@ -70,6 +70,21 @@ constexpr std::uint64_t kDecodeCacheWarmup = REX86_DECODE_CACHE_WARMUP;
 constexpr std::uint64_t kDecodeCacheWarmup = 64;
 #endif
 
+// The batching and the module budget are kWasm's (design #49): the
+// evaluator installs each block at once and holds no modules.
+translate::TranslatorLimits Limits(const TranslationOptions& options)
+{
+    translate::TranslatorLimits limits;
+    limits.threshold = options.threshold;
+    limits.max_block_instructions = options.max_block_instructions;
+    if (options.mode == TranslationMode::kWasm)
+    {
+        limits.batch_wait = options.batch_wait;
+        limits.max_modules = options.max_modules;
+    }
+    return limits;
+}
+
 }  // namespace
 
 Engine Cpu::ActiveEngine() const
@@ -89,8 +104,7 @@ bool Cpu::SetTranslation(const TranslationOptions& options)
             return true;
         case TranslationMode::kEvaluator:
             translator_ = std::make_unique<translate::Translator>(
-                std::make_unique<translate::EvaluatorBackend>(), options.threshold,
-                options.max_block_instructions);
+                std::make_unique<translate::EvaluatorBackend>(), Limits(options));
             return true;
         case TranslationMode::kWasm:
             if (!translate::wasm::Runnable() || options.wasm == nullptr)
@@ -101,8 +115,9 @@ bool Cpu::SetTranslation(const TranslationOptions& options)
                 return false;
             }
             translator_ = std::make_unique<translate::Translator>(
-                std::make_unique<translate::wasm::WasmBackend>(options.wasm), options.threshold,
-                options.max_block_instructions);
+                std::make_unique<translate::wasm::WasmBackend>(options.wasm,
+                                                               options.blocks_per_module),
+                Limits(options));
             return true;
     }
     return false;
@@ -132,7 +147,12 @@ void Cpu::FailWasmModule(const std::uint32_t ticket)
 TranslationStats Cpu::translation_stats() const
 {
     TranslationStats stats = translation_stats_;
-    stats.blocks_translated = translator_ ? translator_->translated_count() : 0;
+    if (translator_)
+    {
+        stats.blocks_translated = translator_->translated_count();
+        stats.modules_submitted = translator_->modules_submitted();
+        stats.modules_evicted = translator_->modules_evicted();
+    }
     return stats;
 }
 

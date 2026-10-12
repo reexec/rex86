@@ -1,9 +1,11 @@
 #include "tools/irdiff/irdiff.h"
 
+#include <algorithm>
 #include <cinttypes>
 #include <cstdio>
 #include <cstring>
 #include <random>
+#include <string>
 #include <vector>
 
 #include "decode/decoder.h"
@@ -383,7 +385,21 @@ struct Runner
         }
     }
 
-    // The same block through the wasm backend, against the interpreter.
+    // A block waiting for its batch's module (design #49), with the
+    // features its case ran under.
+    struct WasmCase
+    {
+        Machine start;
+        translate::ir::Block block;
+        std::vector<std::uint8_t> code;
+        std::string label;
+        Features features;
+    };
+    std::vector<WasmCase> wasm_cases;
+
+    // The same block through the wasm backend, against the interpreter. The
+    // blocks gather options.wasm_batch at a time into one module, as the
+    // runtime batches them (design #49).
     void CompareWasm(const Machine& start, const translate::ir::Block& block,
                      const std::uint8_t* code, const unsigned length, const char* label)
     {
@@ -391,23 +407,61 @@ struct Runner
         {
             return;
         }
-        translate::wasm::WasmBackend backend(options.wasm);
-        translate::Translation translation;
-        translation.block = block;
-        translation.ticket = 1;
-        if (backend.Compile(&translation) != translate::CompileStatus::kReady)
+        wasm_cases.push_back(
+            WasmCase{start, block, std::vector<std::uint8_t>(code, code + length), label, features});
+        if (wasm_cases.size() >= std::clamp(options.wasm_batch, 1u, translate::kMaxBatchBlocks))
         {
-            Fail(std::string(label) + ": the host refused the module", code, length, block);
+            FlushWasm();
+        }
+    }
+
+    void FlushWasm()
+    {
+        if (wasm_cases.empty())
+        {
             return;
         }
+        translate::wasm::WasmBackend backend(options.wasm, translate::kMaxBatchBlocks);
+        std::vector<translate::Translation> translations(wasm_cases.size());
+        std::vector<translate::Translation*> batch;
+        for (std::size_t i = 0; i < wasm_cases.size(); ++i)
+        {
+            translations[i].block = wasm_cases[i].block;
+            batch.push_back(&translations[i]);
+        }
+        const bool ready = backend.Compile(batch.data(), static_cast<std::uint32_t>(batch.size()), 1) ==
+                           translate::CompileStatus::kReady;
+        ++stats.wasm_modules;
+        for (std::size_t i = 0; i < wasm_cases.size(); ++i)
+        {
+            const WasmCase& item = wasm_cases[i];
+            const auto length = static_cast<unsigned>(item.code.size());
+            if (!ready)
+            {
+                Fail(item.label + ": the host refused the module", item.code.data(), length, item.block);
+                continue;
+            }
+            RunWasm(item, translations[i], backend);
+            backend.Drop(translations[i]);
+        }
+        wasm_cases.clear();
+    }
+
+    void RunWasm(const WasmCase& item, const translate::Translation& translation,
+                 translate::wasm::WasmBackend& backend)
+    {
+        const Machine& start = item.start;
+        const translate::ir::Block& block = translation.block;
+        const std::uint8_t* code = item.code.data();
+        const auto length = static_cast<unsigned>(item.code.size());
+        const char* label = item.label.c_str();
         Machine compiled(start);
         const translate::ir::ExitResult exit = backend.Run(translation, compiled.state, compiled.memory);
-        backend.Drop(translation);
         ++stats.wasm_runs;
         Machine interpreted(start);
         for (std::uint32_t i = 0; i < exit.steps; ++i)
         {
-            interp::Step(interpreted.state, interpreted.memory, environment, features);
+            interp::Step(interpreted.state, interpreted.memory, environment, item.features);
         }
         const translate::ir::ExitResult evaluated_exit = [&] {
             Machine evaluated(start);
@@ -487,6 +541,7 @@ Stats RunForms(const Options& options)
         runner.Compare(start, optimized, bytes, d.Length(), "form optimized");
         runner.CompareWasm(start, optimized, bytes, d.Length(), "form wasm");
     }
+    runner.FlushWasm();
     return runner.stats;
 }
 
@@ -538,6 +593,7 @@ Stats RunBlocks(const Options& options)
         runner.CompareWasm(start, optimized, code.data(), static_cast<unsigned>(code.size()),
                            "block wasm");
     }
+    runner.FlushWasm();
     return runner.stats;
 }
 

@@ -1,5 +1,5 @@
-// The synthetic workloads (design #27, decision 2): five kernels, each a
-// subroutine standing for one shape of game code, and six drivers that
+// The synthetic workloads (design #27, decision 2): six kernels, each a
+// subroutine standing for one shape of game code, and seven drivers that
 // call them and end at a gate address. Every workload has a C++ reference
 // model so the harness never credits an engine that is fast and wrong.
 
@@ -16,10 +16,11 @@ namespace rex86::bench
 {
 
 // The guest memory layout: 4 MiB, code read-execute, data and stack
-// read-write, everything else unmapped.
+// read-write, everything else unmapped. The code region runs up to the data
+// so that the blocks kernel fits (design #49).
 inline constexpr std::uint32_t kMemoryBytes = 0x00400000u;
 inline constexpr std::uint32_t kCodeBase = 0x00010000u;
-inline constexpr std::uint32_t kCodeSize = 0x00010000u;
+inline constexpr std::uint32_t kCodeSize = 0x000F0000u;
 inline constexpr std::uint32_t kDataBase = 0x00100000u;
 inline constexpr std::uint32_t kDataSize = 0x00100000u;
 inline constexpr std::uint32_t kStackBase = 0x003F0000u;
@@ -46,6 +47,9 @@ inline constexpr std::uint32_t kX87Result = kDataBase + 0x60020u;
 inline constexpr std::uint32_t kAluIterations = 4096u;
 inline constexpr std::uint32_t kCallIterations = 2048u;
 inline constexpr std::uint32_t kStringIterations = 4096u;
+// The blocks kernel's distinct blocks: more than Firefox installs as one
+// module each (design #49, decision 5).
+inline constexpr std::uint32_t kBlocksCount = 24576u;
 
 enum class Kernel : std::uint8_t
 {
@@ -54,9 +58,10 @@ enum class Kernel : std::uint8_t
     kCall,
     kString,
     kX87,
+    kBlocks,
 };
 
-inline constexpr unsigned kKernelCount = 5;
+inline constexpr unsigned kKernelCount = 6;
 
 struct Workload
 {
@@ -69,7 +74,7 @@ struct Workload
     std::uint32_t expected_edi = 0;
 };
 
-// One code image holding the five kernels and the six drivers.
+// One code image holding the six kernels and the seven drivers.
 struct Image
 {
     std::uint32_t base = kCodeBase;

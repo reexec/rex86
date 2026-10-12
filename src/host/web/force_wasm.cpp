@@ -1,6 +1,8 @@
 // Linked into the test tools of a REX86_FORCE_TRANSLATION=WASM build
 // (design #45, decision 5): before main, every Cpu made afterwards
-// translates every block at its first entry through the web adapter.
+// translates every block at its first entry through the web adapter. One
+// block per module, so that a block run once runs translated rather than
+// waiting for a batch (design #49, decision 2).
 #if !defined(__EMSCRIPTEN__)
 #error "force_wasm.cpp belongs to the Emscripten test build"
 #endif
@@ -18,6 +20,7 @@ rex86::host::web::WebWasmModuleServices g_services;
     options.mode = rex86::TranslationMode::kWasm;
     options.threshold = 0;
     options.wasm = &g_services;
+    options.blocks_per_module = 1;
     rex86::SetDefaultTranslation(options);
     return true;
 }();

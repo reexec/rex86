@@ -1,6 +1,7 @@
-// The wasm backend (design #45, decision 3): compiles each translated block
-// into a module, hands it to the host's WasmModuleServices, and calls the
-// installed function through the indirect function table. Module bytes can
+// The wasm backend (design #45, decision 3): compiles each batch of
+// translated blocks into one module exporting a function per block (design
+// #49), hands it to the host's WasmModuleServices, and calls the installed
+// functions through the indirect function table. Module bytes can
 // be made on any host; running them needs a wasm32 build.
 
 #ifndef REX86_TRANSLATE_WASM_BACKEND_H_
@@ -26,9 +27,11 @@ std::uint32_t CheckHelperIndex();
 class WasmBackend final : public Backend
 {
 public:
-    explicit WasmBackend(WasmModuleServices* services) : services_(services) {}
+    WasmBackend(WasmModuleServices* services, std::uint32_t blocks_per_module);
 
-    CompileStatus Compile(Translation* translation) override;
+    [[nodiscard]] std::uint32_t BatchCapacity() const override { return batch_; }
+    CompileStatus Compile(Translation* const* translations, std::uint32_t count,
+                          std::uint32_t ticket) override;
     ir::ExitResult Run(const Translation& translation, CpuState& state, GuestMemory& memory) override;
     void Drop(const Translation& translation) override;
     void Finished(std::uint32_t ticket) override;
@@ -37,6 +40,7 @@ public:
 
 private:
     WasmModuleServices* services_;
+    std::uint32_t batch_;
     // Module bytes a pending installation may still read.
     std::unordered_map<std::uint32_t, Bytes> pending_bytes_;
 };

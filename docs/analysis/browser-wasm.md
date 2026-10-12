@@ -51,9 +51,79 @@ Emscripten 테스트 도구를 실제 브라우저에서 돌린 결과다. 대�
   * 이 도구는 모듈 바이트를 JS로 복사하며 쓰레기를 만들고, 그 쓰레기가 대부분의 경우 수집을 일으킨다. 그래서 거절이 드물다.
   * 끝난 Worker의 모듈은 바로 회수되지 않는다. 단위 테스트(생성 모듈 수천 개) 바로 뒤에 시작한 도구는 주 `.wasm` 인스턴스화부터 실패했다. 테스트 사이에 3초 이상 기다리면 통과했다.
 * **모음의 대응**: 테스트 사이에 5초를 기다린다. 브라우저 모음의 IR 차등은 5,000건으로 줄였다. Node ctest는 2만 건, 릴리스 캠페인은 그보다 큰 규모를 유지한다. 메모리 부족만으로 실패한 실행은 15초 뒤 두 번까지 다시 시작하고, 재시도 횟수는 보고에 남는다. 대기 없이 돌리면 이 재시도로도 회복하지 못했다. 실패한 실행이 모듈을 더 남기기 때문이다.
-* **소비자 영향(추정)**: 설치가 거절되면 코어는 그 블록을 인터프리터로 돌리므로 결과는 맞다(#45 계약). 하지만 블록 하나에 모듈 하나를 쓰는 지금의 백엔드는 Firefox에서 프로세스당 1만 6천 개 남짓의 모듈로 묶인다. 번역 실행기의 크기 한도(65,536)보다 훨씬 작다. 무효화 뒤의 재번역도 수집 전까지 이 수에 더해진다. 큰 게스트나 오래 도는 게스트는 번역을 잃을 수 있다. 여러 블록을 모듈 하나로 묶는 설치(#45 결정 2가 남긴 최적화)와 모듈 수 예산이 근거를 얻었다. 후속 이슈로 다룬다.
+* **소비자 영향(추정)**: 설치가 거절되면 코어는 그 블록을 인터프리터로 돌리므로 결과는 맞다(#45 계약). 하지만 블록 하나에 모듈 하나를 쓰는 지금의 백엔드는 Firefox에서 프로세스당 1만 6천 개 남짓의 모듈로 묶인다. 번역 실행기의 크기 한도(65,536)보다 훨씬 작다. 무효화 뒤의 재번역도 수집 전까지 이 수에 더해진다. 큰 게스트나 오래 도는 게스트는 번역을 잃을 수 있다. 여러 블록을 모듈 하나로 묶는 설치(#45 결정 2가 남긴 최적화)와 모듈 수 예산이 근거를 얻었다. [#49](https://github.com/reexec/rex86/issues/49)에서 다뤘다(3.1절).
 
-*Inferred: a dropped module's executable code memory returns only at a garbage collection, which running short of code memory does not start, so creation fails once the process's executable budget is full unless JS heap allocation triggers a collection; 16,349 looks like a per-process executable budget divided by a fixed per-module granule, the actual figures being unresolved (to be checked in SpiderMonkey's `ProcessExecutableMemory`). Confirmed for rex86's tools: `rex86_irdiff --cases 200000` (about 250,000 generated modules) had 9 installations refused in Firefox, matching its `mismatches=` total of 9, irdiff counting refusals as mismatches, with no wrong translation; the tool's copies of module bytes into JS make garbage that usually triggers collections, hence the rarity; a finished Worker's modules are not reclaimed at once, so a tool started right after the unit tests (thousands of generated modules) failed from instantiating its main `.wasm`, and passed after a wait of 3 seconds or more. The suite waits 5 seconds between tests, runs 5,000 IR differential cases in browsers (Node's ctest keeps 20,000 and the release campaign more), and restarts a run that failed for want of memory alone up to twice after 15 seconds, counting the retries in the report; with no wait, those retries did not recover either, the failed runs leaving more modules behind. Consumer impact (inferred): a refused installation leaves the block to the interpreter, so results stay correct (#45's contract), but the current one-module-per-block backend is bounded in Firefox by some 16,000 modules per process, far below the runtime's size limit (65,536), and re-translations after invalidation add to the count until a collection; a large or long-running guest can lose translation. Installing several blocks per module (an optimization #45 decision 2 left open) and a module count budget gain their grounds, for a follow-up issue.*
+*Inferred: a dropped module's executable code memory returns only at a garbage collection, which running short of code memory does not start, so creation fails once the process's executable budget is full unless JS heap allocation triggers a collection; 16,349 looks like a per-process executable budget divided by a fixed per-module granule, the actual figures being unresolved (to be checked in SpiderMonkey's `ProcessExecutableMemory`). Confirmed for rex86's tools: `rex86_irdiff --cases 200000` (about 250,000 generated modules) had 9 installations refused in Firefox, matching its `mismatches=` total of 9, irdiff counting refusals as mismatches, with no wrong translation; the tool's copies of module bytes into JS make garbage that usually triggers collections, hence the rarity; a finished Worker's modules are not reclaimed at once, so a tool started right after the unit tests (thousands of generated modules) failed from instantiating its main `.wasm`, and passed after a wait of 3 seconds or more. The suite waits 5 seconds between tests, runs 5,000 IR differential cases in browsers (Node's ctest keeps 20,000 and the release campaign more), and restarts a run that failed for want of memory alone up to twice after 15 seconds, counting the retries in the report; with no wait, those retries did not recover either, the failed runs leaving more modules behind. Consumer impact (inferred): a refused installation leaves the block to the interpreter, so results stay correct (#45's contract), but the current one-module-per-block backend is bounded in Firefox by some 16,000 modules per process, far below the runtime's size limit (65,536), and re-translations after invalidation add to the count until a collection; a large or long-running guest can lose translation. Installing several blocks per module (an optimization #45 decision 2 left open) and a module count budget gain their grounds, taken up in #49 (section 3.1).*
+
+### 3.1 묶음 설치 뒤(#49) / After batched installation (#49)
+
+근거: [#49 설계](../design/20261012-i049-wasm-module-batching.md), [로그](../work-logs/20261012-i049-wasm-module-batching.md). 호스트 E(AMD Ryzen 5 5600X, Windows 11 Pro x64), emsdk 3.1.74, Node 24.19.0, Playwright 1.63.0(Chromium 153.0.8010.12, Firefox 155.0), 2026-10-12~13.
+
+*Grounds: the #49 design and log. Host E (AMD Ryzen 5 5600X, Windows 11 Pro x64), emsdk 3.1.74, Node 24.19.0, Playwright 1.63.0 (Chromium 153.0.8010.12, Firefox 155.0), 2026-10-12 to 13.*
+
+* **확인됨**(Firefox, Windows): 한도는 모듈 수에 걸린다. 함수를 1, 16, 64개 내보내는 모듈 모두 16,349개째에 실패했고, 설치된 함수는 16,349, 261,584, 1,046,336개였다. wasm 32 KB 모듈까지는 한도가 그대로였고, 51 KB 모듈에서는 8,220개로 절반이 되었다. Linux(#48)와 같은 수다.
+* **추정**: 1 GiB의 실행 메모리를 64 KiB 단위로 나눈 16,384에서 엔진 몫을 뺀 값이다. SpiderMonkey 소스로는 확인하지 않았다.
+* **확인됨**(Chromium): 모듈 한도 탐침(`drive.mjs --module-limit`)이 상한 4만 개까지 실패 없이 만들었다(2.7초).
+* **확인됨**(WebKit 26.6, Playwright의 Linux 빌드, CI `browsers` [실행 38276824251](https://github.com/reexec/rex86/actions/runs/38276824251)): 탐침이 상한 4만 개까지 실패 없이 만들었다(2.4초). 같은 실행에서 Chromium 4만 개, Firefox 16,349개였다.
+* **미확정**: 실기기 Safari(macOS, iOS)의 한도. 가이드 3절 6단계로 잰다.
+
+*Confirmed (Firefox, Windows): the limit counts modules; modules exporting 1, 16 and 64 functions all failed at the 16,349th, with 16,349, 261,584 and 1,046,336 functions installed; the limit held up to 32 KB wasm modules and halved to 8,220 at 51 KB; the same count as on Linux (#48). Inferred: 16,384, 1 GiB of executable memory in 64 KiB units, less the engine's share; not checked in SpiderMonkey's source. Confirmed (Chromium): the module limit probe (`drive.mjs --module-limit`) made its cap of 40,000 without a failure (2.7 seconds). Confirmed (WebKit 26.6, Playwright's Linux build, CI `browsers` run 38276824251): the probe made its cap of 40,000 without a failure (2.4 seconds), Chromium making 40,000 and Firefox 16,349 in the same run. Unresolved: real-device Safari's (macOS, iOS) limit, measured through guide section 3 step 6.*
+
+**`blocks` 워크로드**(서로 다른 두 명령 블록 24,576개, 바퀴마다 모두 진입), `rex86_bench --engine wasm --only blocks --frames 60`, 새 브라우저 하나에 한 번씩. 묶음 없음과 예산 없음은 `--blocks-per-module 1 --max-modules 0`이다.
+
+*The `blocks` workload (24,576 distinct two-instruction blocks, all entered every lap), `rex86_bench --engine wasm --only blocks --frames 60`, once per fresh browser; no batching and no budget is `--blocks-per-module 1 --max-modules 0`.*
+
+| 엔진 / engine | 설정 / setting | MIPS | 설치 / installed | 거절 / refused | 설치 시간 / install time |
+|---|---|---:|---:|---:|---:|
+| Firefox | 묶음 없음, 예산 없음 / none | 0.34 | 16,339 | **8,241** | 157.8 s (9.7 ms/모듈, 한도 근처에서 느려짐 / slowing near the limit) |
+| Firefox | 기본값(묶음 16) / defaults (16) | 7.3 | 1,537 | **0** | 1.1 s |
+| Node | 묶음 없음, 예산 없음 / none | 2.8 | 24,580 | 0 | 2.7 s |
+| Node | 기본값 / defaults | 9.5 | 1,537 | 0 | 0.23 s |
+
+* **확인됨**: 묶음 16으로 Firefox의 설치 거절이 0이 되었고, 블록 24,580개가 모두 번역되었다. 묶음 없이 Firefox는 16,339개를 설치한 뒤 나머지를 거절했다. 거절된 블록은 인터프리터로 돌았고 결과 검증(`verified=ok`)은 통과했다.
+* **확인됨**: 이 워크로드에서 번역은 인터프리터(Node 3.0, Chromium 3.5, Firefox 3.8 MIPS)보다 묶음 16에서만 빠르다. 두 명령 블록은 블록마다 드는 디스패치 비용이 커서, 모듈이 많으면(묶음 없음) 인터프리터보다 느리다. 모듈 수와 처리량의 관계(인스턴스가 많을 때의 호출 비용인지, 엔진의 계층 컴파일 차이인지)는 미확정이다.
+
+*Confirmed: with 16-block batches Firefox refused nothing and all 24,580 blocks were translated, while without batching it installed 16,339 and refused the rest, those blocks running on the interpreter and the result check (`verified=ok`) passing. Confirmed: on this workload translation beats the interpreter (Node 3.0, Chromium 3.5, Firefox 3.8 MIPS) only with 16-block batches; two-instruction blocks pay a large dispatch cost per block, and with many modules (no batching) translation is slower than the interpreter; what links the module count to throughput (call cost across many instances, or the engines' tiered compilation) is unresolved.*
+
+**묶음 크기와 대기**(세 번 번갈아 돌린 중앙값, MIPS, 괄호는 첫 프레임 ms). `w`는 `batch_wait`, 표시가 없으면 4,096. 묶음 1과 4의 `blocks`는 작업 집합(24,576블록)이 예산(4,096모듈)을 넘어 축출이 일어나므로 축출 억제를 넣은 뒤 다시 쟀다.
+
+*Batch size and wait (medians of three interleaved runs, MIPS, first-frame ms in parentheses), `w` being `batch_wait`, 4,096 where unmarked; `blocks` at batch sizes 1 and 4 has a working set (24,576 blocks) beyond the budget (4,096 modules), so evictions occur, and was measured again after the eviction backoff.*
+
+| 엔진 / engine | 설정 / setting | alu | call | mixed | blocks | blocks 모듈 / modules | 설치 µs/모듈 / install µs per module |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Node | 인터프리터 / interpreter | 19.5 (87) | 17.3 (57) | 30.8 (39) | 3.0 | | |
+| Node | 1 | 184.5 (15) | 106.4 (13) | 52.2 (29) | 1.7 | 114,708 | 110 |
+| Node | 4 | 187.1 (23) | 109.1 (15) | 62.6 (24) | 3.4 | 22,533 | |
+| Node | **16** | 202.7 (19) | 106.3 (13) | 50.8 (23) | 11.4 | 1,537 | 148 |
+| Node | 64 | 195.6 (22) | 110.0 (14) | 62.1 (27) | 12.6 | 385 | 251 |
+| Node | 16, w256 | 180.9 (19) | 91.9 (18) | 58.6 (26) | 10.8 | 1,537 | |
+| Node | 16, w65536 | 188.0 (48) | 106.0 (31) | 60.7 (31) | 12.9 | 1,537 | |
+| Chromium | 인터프리터 / interpreter | 23.2 (67) | 21.3 (42) | 41.0 (26) | 3.5 | | |
+| Chromium | 1 | 185.0 (16) | 109.3 (11) | 61.6 (22) | 1.2 | 114,708 | 239 |
+| Chromium | 4 | 159.7 (17) | 100.5 (17) | 59.8 (24) | 3.5 | 22,533 | |
+| Chromium | **16** | 184.2 (21) | 98.1 (18) | 59.2 (23) | 12.7 | 1,537 | 145 |
+| Chromium | 64 | 194.1 (19) | 93.8 (20) | 58.3 (30) | 16.3 | 385 | 233 |
+| Chromium | 16, w256 | 166.9 (17) | 94.7 (12) | 56.1 (24) | 12.8 | 1,537 | |
+| Chromium | 16, w65536 | 143.1 (61) | 94.3 (41) | 59.1 (26) | 13.6 | 1,537 | |
+| Firefox | 인터프리터 / interpreter | 21.7 (72) | 23.5 (47) | 42.8 (28) | 3.8 | | |
+| Firefox | 1 | 147.8 (8) | 74.2 (20) | 54.9 (22) | 2.0 | 114,696 (거절 8 / 8 refused) | 117 |
+| Firefox | 4 | 201.3 (11) | 86.1 (17) | 61.2 (25) | 3.8 | 22,533 | |
+| Firefox | **16** | 173.9 (11) | 87.0 (19) | 60.8 (26) | 8.8 | 1,537 | 647 |
+| Firefox | 64 | 169.0 (10) | 89.3 (15) | 60.7 (25) | 10.4 | 385 | 877 |
+| Firefox | 16, w256 | 180.2 (8) | 87.2 (12) | 60.0 (21) | 8.8 | 1,537 | |
+| Firefox | 16, w65536 | 157.1 (49) | 90.0 (34) | 59.0 (32) | 8.4 | 1,537 | |
+
+* **확인됨**: 블록이 몇 안 되는 alu, call, mixed(모듈 3~22개)는 묶음 크기 1~64 사이의 차이가 같은 설정의 실행 간 편차 안이다. 이 기계(Windows, 다른 작업과 함께)의 편차는 ±10%를 넘을 때가 있다.
+* **확인됨**: `batch_wait` 65,536은 작은 워크로드의 첫 번역을 늦춰 첫 프레임이 길어졌다(Chromium alu 21 → 61 ms, Node 19 → 48 ms). 256은 4,096보다 나은 점이 없었다.
+* **확인됨**: 묶음 하나의 설치 시간은 블록 수보다 천천히 는다. Firefox는 모듈당 117 µs(1블록), 647 µs(16블록), 877 µs(64블록)이다. Firefox의 값은 `performance.now()`가 1 ms 단위라 모듈 수천 개의 합으로만 뜻이 있다.
+* **확인됨**(축출 억제 전, 같은 빌드에서 억제만 없음): 묶음 1, 예산 4,096의 `blocks`는 Chromium 0.3 MIPS(모듈 76만 2천 개), Firefox 0.5 MIPS(76만 1천 개, 거절 52)였다. 억제 뒤 1.2와 2.0 MIPS, 11만 5천 개가 되었다. Firefox가 76만 개를 거절 52개로 설치한 것은, 설치 도구가 바이트를 JS로 복사하며 만드는 쓰레기가 수집을 일으켜 버린 모듈을 돌려받기 때문으로 보인다(추정, #48의 추정과 같다).
+* 기본값: 묶음 16, `batch_wait` 4,096, 예산 4,096 모듈(임시). 고른 이유는 설계 결정 4, 5.
+
+*Confirmed: alu, call and mixed, with few blocks (3 to 22 modules), differ between batch sizes 1 and 64 within the run-to-run spread of one setting, which on this machine (Windows, with other work running) sometimes exceeds ±10%. Confirmed: a `batch_wait` of 65,536 delayed small workloads' first translation and lengthened the first frame (Chromium alu 21 to 61 ms, Node 19 to 48 ms), while 256 was no better than 4,096. Confirmed: a batch's installation time grows more slowly than its block count, Firefox taking 117 µs per module at 1 block, 647 µs at 16 and 877 µs at 64, Firefox's figures meaningful only as sums over thousands of modules given `performance.now()`'s 1 ms granularity. Confirmed (before the eviction backoff, the same build without it): `blocks` with 1-block batches and a budget of 4,096 ran at 0.3 MIPS in Chromium (762,000 modules) and 0.5 in Firefox (761,000, 52 refused), and after the backoff at 1.2 and 2.0 MIPS with 115,000; Firefox installing 761,000 modules with 52 refusals is attributed to the garbage the installer makes copying bytes into JS triggering collections that return dropped modules (inferred, as in #48). Defaults: 16 blocks per module, a `batch_wait` of 4,096 and a budget of 4,096 modules (provisional), chosen per design decisions 4 and 5.*
+
+**모음과 도구**: 브라우저 모음의 IR 차등을 2만 건(Node ctest와 같음)으로 올렸다. wasm 비교는 블록 16개씩 모듈 하나로 설치된다. Chromium과 Firefox가 10/10, 재시도 0으로 통과했다. Firefox는 테스트 사이 대기 0으로도 세 번 모두 10/10, 재시도 0이었다(#48에서는 대기 0이 실패했다). 모음의 기본 대기를 5초에서 1초로 줄였다. Node에서 `rex86_irdiff --cases 500000 --seed 2490000000`은 형태 50만 건(wasm 실행 489,139건, 모듈 30,572개)과 블록 125,001건(모듈 7,813개)에서 불일치 0이었다.
+
+*The suite and tools: the browser suite's IR differential rose to 20,000 cases (as Node's ctest), its wasm comparisons installing 16 blocks per module; Chromium and Firefox passed 10/10 with no retry, Firefox also 10/10 with no retry three times out of three with no wait between tests (where #48's zero wait failed), so the suite's default wait went from 5 seconds to 1. On Node, `rex86_irdiff --cases 500000 --seed 2490000000` found no mismatch over 500,000 forms (489,139 wasm runs, 30,572 modules) and 125,001 blocks (7,813 modules).*
 
 ## 4. 처리량 / Throughput
 

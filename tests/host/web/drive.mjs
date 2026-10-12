@@ -6,6 +6,11 @@
 //   npm ci && npx playwright install chromium firefox webkit
 //   node drive.mjs --bin <build>/bin [--browsers chromium,firefox,webkit] [--only unit,irdiff]
 //                  [--settle ms]
+//   node drive.mjs --bin <build>/bin --module-limit [--browsers ...]
+//
+// --module-limit runs module_limit.html instead of the suite, in a fresh
+// browser each, and prints how many wasm modules the browser held (design
+// #49, decision 5); it fails only when the probe could not run.
 //
 // With GITHUB_STEP_SUMMARY set, a table per browser goes to the job summary.
 
@@ -20,9 +25,15 @@ const kSuiteTimeoutMs = 60 * 60 * 1000;
 const engines = { chromium, firefox, webkit };
 
 function parseArguments(argv) {
-  const options = { bin: null, browsers: ['chromium', 'firefox', 'webkit'], only: null, settle: null };
+  const options = {
+    bin: null, browsers: ['chromium', 'firefox', 'webkit'], only: null, settle: null, moduleLimit: false,
+  };
   for (let i = 0; i < argv.length; ++i) {
     const value = argv[i + 1];
+    if (argv[i] === '--module-limit') {
+      options.moduleLimit = true;
+      continue;
+    }
     if (argv[i] === '--bin' && value) {
       options.bin = path.resolve(value);
     } else if (argv[i] === '--browsers' && value) {
@@ -83,10 +94,24 @@ async function runBrowser(name, origin, { only, settle }) {
   }
 }
 
+// The module limit probe in a fresh browser: modules made before count.
+async function probeModuleLimit(name, origin) {
+  const browser = await engines[name].launch();
+  try {
+    const page = await browser.newPage();
+    await page.goto(`${origin}/module_limit.html?funcs=1&cap=40000`);
+    await page.waitForFunction(() => window.rex86ModuleLimit !== undefined, null,
+      { timeout: 10 * 60 * 1000, polling: 500 });
+    return { version: browser.version(), limit: await page.evaluate(() => window.rex86ModuleLimit) };
+  } finally {
+    await browser.close();
+  }
+}
+
 const options = parseArguments(process.argv.slice(2));
 if (!options) {
   console.error('usage: node drive.mjs --bin <REX86_BROWSER build>/bin ' +
-    '[--browsers chromium,firefox,webkit] [--only test,...] [--settle ms]');
+    '[--browsers chromium,firefox,webkit] [--only test,...] [--settle ms] [--module-limit]');
   process.exit(2);
 }
 if (!fs.existsSync(path.join(options.bin, 'rex86_browser.json'))) {
@@ -96,6 +121,28 @@ if (!fs.existsSync(path.join(options.bin, 'rex86_browser.json'))) {
 
 const server = await startServer(options.bin);
 const origin = `http://127.0.0.1:${server.address().port}`;
+if (options.moduleLimit) {
+  let probeFailed = false;
+  const rows = [];
+  for (const name of options.browsers) {
+    try {
+      const { version, limit } = await probeModuleLimit(name, origin);
+      const reached = limit.modules >= limit.cap ? 'cap' : 'refused';
+      console.log(`[rex86-browser] browser=${name} version=${version} module_limit funcs=${limit.funcs} ` +
+        `cap=${limit.cap} modules=${limit.modules} ended=${reached} ms=${limit.ms} error="${limit.error}"`);
+      rows.push(`| ${name} ${version} | ${limit.modules} | ${reached} | ${limit.error} |`);
+    } catch (error) {
+      console.log(`[rex86-browser] browser=${name} module_limit result=fail runner_error="${String(error).split('\n')[0]}"`);
+      probeFailed = true;
+    }
+  }
+  server.close();
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, ['## wasm module limit', '',
+      '| browser | modules | ended | error |', '|---|---|---|---|', ...rows, ''].join('\n'));
+  }
+  process.exit(probeFailed ? 1 : 0);
+}
 let failed = false;
 const summaries = [];
 for (const name of options.browsers) {

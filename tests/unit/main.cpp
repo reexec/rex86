@@ -28,6 +28,7 @@ int main()
     RunRepBudgetTests(context);
     RunIrTests(context);
     RunTranslateRuntimeTests(context);
+    RunTranslateBatchTests(context);
     RunWasmBackendTests(context);
 
     std::printf("[rex86-unit-tests] checks=%d failures=%d\n", context.checks, context.failures);

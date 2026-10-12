@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <iterator>
 
 #include "tools/bench/asm.h"
 
@@ -237,6 +238,42 @@ std::uint32_t X87Model()
     return kX87TableCount * (kX87TableCount + 1u) / 2u;
 }
 
+// blocks: kBlocksCount distinct two-instruction blocks, each an ADD and a
+// short jump over one INT3 byte to the next, so that every lap enters every
+// block once. A jump to the very next instruction would not end the
+// interpreter's block, whose loop sees no taken branch there.
+// EAX := the sum of the immediates. It measures code that is wide rather
+// than hot: the module count a translation backend needs (design #49).
+std::uint8_t BlockImmediate(const std::uint32_t i)
+{
+    return static_cast<std::uint8_t>((i * 37u + 11u) & 0x7Fu);
+}
+
+void EmitBlocks(Assembler* a)
+{
+    a->MovImm(Reg::kEax, 0);
+    for (std::uint32_t i = 0; i < kBlocksCount; ++i)
+    {
+        a->Byte(0x83);  // add eax, imm8
+        a->Byte(0xC0);
+        a->Byte(BlockImmediate(i));
+        a->Byte(0xEB);  // jmp short over the INT3 to the next block
+        a->Byte(0x01);
+        a->Byte(0xCC);
+    }
+    a->Ret();
+}
+
+std::uint32_t BlocksModel()
+{
+    std::uint32_t eax = 0;
+    for (std::uint32_t i = 0; i < kBlocksCount; ++i)
+    {
+        eax += BlockImmediate(i);
+    }
+    return eax;
+}
+
 void EmitDriver(Assembler* a, const Image& image, Workload* workload)
 {
     const Label entry = a->NewLabel();
@@ -283,6 +320,8 @@ const char* KernelName(const Kernel kernel)
             return "string";
         case Kernel::kX87:
             return "x87";
+        case Kernel::kBlocks:
+            return "blocks";
     }
     return "unknown";
 }
@@ -301,6 +340,8 @@ std::uint32_t KernelModel(const Kernel kernel)
             return StringModel();
         case Kernel::kX87:
             return X87Model();
+        case Kernel::kBlocks:
+            return BlocksModel();
     }
     return 0;
 }
@@ -310,7 +351,7 @@ bool BuildImage(Image* image, std::string* error)
     Assembler a(image->base);
     using Emitter = void (*)(Assembler*);
     const Emitter emitters[kKernelCount] = {EmitAlu, EmitMemory, EmitCall,
-                                            EmitString, EmitX87};
+                                            EmitString, EmitX87, EmitBlocks};
     for (unsigned i = 0; i < kKernelCount; ++i)
     {
         image->kernel_entry[i] = a.Here();
@@ -318,10 +359,11 @@ bool BuildImage(Image* image, std::string* error)
     }
 
     image->workloads.clear();
-    const Kernel all[kKernelCount] = {Kernel::kAlu, Kernel::kMemory,
-                                      Kernel::kCall, Kernel::kString,
-                                      Kernel::kX87};
-    for (const Kernel kernel : all)
+    // mixed keeps the five kernels it had before blocks (design #49), so
+    // that its figures compare across versions.
+    const Kernel mixed_kernels[] = {Kernel::kAlu, Kernel::kMemory, Kernel::kCall,
+                                    Kernel::kString, Kernel::kX87};
+    for (const Kernel kernel : mixed_kernels)
     {
         Workload workload;
         workload.name = KernelName(kernel);
@@ -330,8 +372,12 @@ bool BuildImage(Image* image, std::string* error)
     }
     Workload mixed;
     mixed.name = "mixed";
-    mixed.kernels.assign(all, all + kKernelCount);
+    mixed.kernels.assign(std::begin(mixed_kernels), std::end(mixed_kernels));
     image->workloads.push_back(mixed);
+    Workload blocks;
+    blocks.name = KernelName(Kernel::kBlocks);
+    blocks.kernels = {Kernel::kBlocks};
+    image->workloads.push_back(blocks);
 
     for (Workload& workload : image->workloads)
     {

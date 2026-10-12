@@ -169,6 +169,11 @@ jobs:
         with:
           version: 3.1.74
           actions-cache-folder: emsdk-cache
+      # Node 24, as the campaign's wasm-translate: under the runner's Node 20
+      # many generated modules grow a process past its heap (#50, #49).
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y ninja-build
       - name: Configure
@@ -219,6 +224,11 @@ jobs:
       - name: Test
         working-directory: tests/host/web
         run: node drive.mjs --bin ../../../build/web-browser-release/bin
+      # How many wasm modules each engine holds per process (design #49,
+      # decision 5); a record, failing only when the probe cannot run.
+      - name: Module limit probe
+        working-directory: tests/host/web
+        run: node drive.mjs --bin ../../../build/web-browser-release/bin --module-limit
       # The Pages site (design #52): the build under its own version and under
       # one it does not report; comparing the first with itself must pass and
       # comparing the second must fail the version check.
