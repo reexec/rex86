@@ -64,9 +64,10 @@ Emscripten 테스트 도구를 실제 브라우저에서 돌린 결과다. 대�
 * **확인됨**(Firefox, Windows): 한도는 모듈 수에 걸린다. 함수를 1, 16, 64개 내보내는 모듈 모두 16,349개째에 실패했고, 설치된 함수는 16,349, 261,584, 1,046,336개였다. wasm 32 KB 모듈까지는 한도가 그대로였고, 51 KB 모듈에서는 8,220개로 절반이 되었다. Linux(#48)와 같은 수다.
 * **추정**: 1 GiB의 실행 메모리를 64 KiB 단위로 나눈 16,384에서 엔진 몫을 뺀 값이다. SpiderMonkey 소스로는 확인하지 않았다.
 * **확인됨**(Chromium): 모듈 한도 탐침(`drive.mjs --module-limit`)이 상한 4만 개까지 실패 없이 만들었다(2.7초).
-* **미확정**: WebKit(JavaScriptCore)과 실기기 Safari의 한도. CI `browsers`의 탐침 단계와 가이드 3절 6단계로 잰다.
+* **확인됨**(WebKit 26.6, Playwright의 Linux 빌드, CI `browsers` [실행 38276824251](https://github.com/reexec/rex86/actions/runs/38276824251)): 탐침이 상한 4만 개까지 실패 없이 만들었다(2.4초). 같은 실행에서 Chromium 4만 개, Firefox 16,349개였다.
+* **미확정**: 실기기 Safari(macOS, iOS)의 한도. 가이드 3절 6단계로 잰다.
 
-*Confirmed (Firefox, Windows): the limit counts modules; modules exporting 1, 16 and 64 functions all failed at the 16,349th, with 16,349, 261,584 and 1,046,336 functions installed; the limit held up to 32 KB wasm modules and halved to 8,220 at 51 KB; the same count as on Linux (#48). Inferred: 16,384, 1 GiB of executable memory in 64 KiB units, less the engine's share; not checked in SpiderMonkey's source. Confirmed (Chromium): the module limit probe (`drive.mjs --module-limit`) made its cap of 40,000 without a failure (2.7 seconds). Unresolved: WebKit's (JavaScriptCore's) and real-device Safari's limits, measured by CI `browsers`' probe step and guide section 3 step 6.*
+*Confirmed (Firefox, Windows): the limit counts modules; modules exporting 1, 16 and 64 functions all failed at the 16,349th, with 16,349, 261,584 and 1,046,336 functions installed; the limit held up to 32 KB wasm modules and halved to 8,220 at 51 KB; the same count as on Linux (#48). Inferred: 16,384, 1 GiB of executable memory in 64 KiB units, less the engine's share; not checked in SpiderMonkey's source. Confirmed (Chromium): the module limit probe (`drive.mjs --module-limit`) made its cap of 40,000 without a failure (2.7 seconds). Confirmed (WebKit 26.6, Playwright's Linux build, CI `browsers` run 38276824251): the probe made its cap of 40,000 without a failure (2.4 seconds), Chromium making 40,000 and Firefox 16,349 in the same run. Unresolved: real-device Safari's (macOS, iOS) limit, measured through guide section 3 step 6.*
 
 **`blocks` 워크로드**(서로 다른 두 명령 블록 24,576개, 바퀴마다 모두 진입), `rex86_bench --engine wasm --only blocks --frames 60`, 새 브라우저 하나에 한 번씩. 묶음 없음과 예산 없음은 `--blocks-per-module 1 --max-modules 0`이다.
 
