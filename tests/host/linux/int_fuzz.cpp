@@ -21,10 +21,13 @@
 //
 // Usage: rex86_int_fuzz [iterations] [seed] [--verbose] [--stats] [--translate]
 //                       [--only MNEMONIC] [--record FILE] [--failures FILE]
+//                       [--progress N] [--from N]
 // --record writes every case but vendor deviations (the corpus), --failures
 // the mismatches only; --translate replays the core side through
 // translation, each instruction its own block (design #46);
-// rex86_trace --dump N FILE spells a recorded case out.
+// rex86_trace --dump N FILE spells a recorded case out. --progress N prints
+// a line every N cases and --from N generates the first N cases without
+// running them, so a death near case N reproduces quickly (#53).
 
 #if !defined(__linux__) || !defined(__i386__)
 #error "the integer host comparison runs in i386 Linux processes only"
@@ -618,29 +621,78 @@ volatile sig_atomic_t g_armed = 0;
 volatile sig_atomic_t g_rep_string = 0;
 HostOutcome g_outcome;
 
+// Breadcrumbs for a death the fuzz cannot report through its own output
+// (#53): the case being run and its bytes, and whether the handler is
+// already running. The handler is installed with SA_NODEFER, so a signal
+// raised inside it re-enters it instead of waiting.
+volatile std::uint64_t g_case = 0;
+std::uint8_t g_code[16] = {};
+volatile sig_atomic_t g_code_length = 0;
+volatile sig_atomic_t g_in_handler = 0;
+
+// Writes "<what>: signal S trapno T eip E case N bytes HEX" to stderr with
+// async-signal-safe calls only.
+void Breadcrumb(const char* what, const int signal, const greg_t* g)
+{
+    char text[256];
+    std::size_t at = 0;
+    const auto put = [&](const char* s) {
+        while (*s != 0 && at + 1 < sizeof text) text[at++] = *s++;
+    };
+    const auto put_number = [&](unsigned long long v, const unsigned base, const int digits) {
+        char piece[24];
+        int n = 0;
+        do
+        {
+            piece[n++] = "0123456789ABCDEF"[v % base];
+            v /= base;
+        } while ((v != 0 || n < digits) && n < 23);
+        while (n > 0 && at + 1 < sizeof text) text[at++] = piece[--n];
+    };
+    put(what);
+    put(": signal ");
+    put_number(static_cast<unsigned>(signal), 10, 1);
+    put(" trapno ");
+    put_number(static_cast<unsigned>(g[REG_TRAPNO]), 10, 1);
+    put(" eip ");
+    put_number(static_cast<std::uint32_t>(g[REG_EIP]), 16, 8);
+    put(" case ");
+    put_number(g_case, 10, 1);
+    put(" bytes ");
+    for (int i = 0; i < g_code_length && i < 16; ++i) put_number(g_code[i], 16, 2);
+    put("\n");
+    if (write(2, text, at) < 0) {}
+}
+
 void Handler(const int signal, siginfo_t*, void* context)
 {
     auto* uc = static_cast<ucontext_t*>(context);
     const greg_t* g = uc->uc_mcontext.gregs;
+    if (g_in_handler != 0)
+    {
+        // A signal inside the handler: report it rather than recurse until
+        // the alternate stack overflows and the kernel kills the process
+        // without a word (#53).
+        Breadcrumb("nested signal in the handler", signal, g);
+        _exit(97);
+    }
+    g_in_handler = 1;
     if (g_armed == 0)
     {
         // A fault in the fuzz itself: say where, then die with the default
         // action when the handler returns and the instruction re-executes.
-        char text[128];
-        const int length = std::snprintf(text, sizeof text,
-                                         "signal %d trapno %d at eip %08X outside the guest\n", signal,
-                                         static_cast<int>(g[REG_TRAPNO]),
-                                         static_cast<unsigned>(g[REG_EIP]));
-        if (write(2, text, static_cast<std::size_t>(length)) < 0) {}
+        Breadcrumb("outside the guest", signal, g);
         struct sigaction action = {};
         action.sa_handler = SIG_DFL;
         sigaction(signal, &action, nullptr);
+        g_in_handler = 0;
         return;
     }
     // A REP string traps after every iteration; let it run to the end.
     if (signal == SIGTRAP && g[REG_TRAPNO] == 1 && g_rep_string != 0 &&
         static_cast<std::uint32_t>(g[REG_EIP]) == kInstruction)
     {
+        g_in_handler = 0;
         return;
     }
     g_outcome.signal = signal;
@@ -654,6 +706,7 @@ void Handler(const int signal, siginfo_t*, void* context)
     g_outcome.eip = static_cast<std::uint32_t>(g[REG_EIP]);
     g_outcome.eflags = static_cast<std::uint32_t>(g[REG_EFL]);
     g_outcome.cr2 = static_cast<std::uint32_t>(uc->uc_mcontext.cr2);
+    g_in_handler = 0;
     siglongjmp(g_jump, 1);
 }
 
@@ -1086,7 +1139,11 @@ bool SourceSegmentFirstCompareFault(const Input& input, const HostOutcome& host,
     const unsigned index = static_cast<unsigned>(source_segment - ZYDIS_REGISTER_ES);
     const std::uint32_t mask = input.decoded.instruction.address_width == 16 ? 0xFFFFu : 0xFFFFFFFFu;
     const std::uint32_t destination = host.gpr[7] & mask;
-    if (c.selectors[index] != 0 || destination - kBase < kRegionSize)
+    // The destination must not be wholly reachable: it may start inside the
+    // region and run past its end (#53, a page-straddling ES:(E)DI).
+    const bool first_inside = destination - kBase < kRegionSize;
+    const bool last_inside = destination + width - 1 - kBase < kRegionSize;
+    if (c.selectors[index] != 0 || (first_inside && last_inside))
     {
         return false;
     }
@@ -1175,12 +1232,22 @@ int main(int argc, char** argv)
     std::string only;
     std::string record_path;
     std::string failures_path;
+    std::uint64_t progress = 0;
+    std::uint64_t from = 0;
     int positional = 0;
     for (int i = 1; i < argc; ++i)
     {
         if (std::strcmp(argv[i], "--verbose") == 0)
         {
             verbose = true;
+        }
+        else if (std::strcmp(argv[i], "--progress") == 0 && i + 1 < argc)
+        {
+            progress = std::strtoull(argv[++i], nullptr, 0);
+        }
+        else if (std::strcmp(argv[i], "--from") == 0 && i + 1 < argc)
+        {
+            from = std::strtoull(argv[++i], nullptr, 0);
         }
         else if (std::strcmp(argv[i], "--translate") == 0)
         {
@@ -1245,6 +1312,8 @@ int main(int argc, char** argv)
         return 2;
     }
 
+    // Line-buffered output, so a process that dies keeps what it printed.
+    std::setvbuf(stdout, nullptr, _IOLBF, 0);
     Generator generator(seed, decoder, forms);
     Host host;
     std::vector<std::uint8_t> before(kRegionSize);
@@ -1259,6 +1328,23 @@ int main(int argc, char** argv)
     {
         Input input;
         generator.Next(&input);
+        if (n < from)
+        {
+            continue;  // --from: the same inputs, generated and skipped
+        }
+        if (progress != 0 && n % progress == 0)
+        {
+            // Not "mismatches=": the campaign's summary looks for that key.
+            std::printf("progress case=%llu so_far=%llu\n", static_cast<unsigned long long>(n),
+                        static_cast<unsigned long long>(mismatches));
+        }
+        g_case = n;
+        g_code_length = 0;
+        for (std::size_t i = 0; i < input.code.size() && i < sizeof g_code; ++i)
+        {
+            g_code[i] = input.code[i];
+        }
+        g_code_length = static_cast<sig_atomic_t>(std::min<std::size_t>(input.code.size(), sizeof g_code));
         std::vector<trace::Bytes> patches = host.Prepare(input);
         std::memcpy(before.data(), host.region(), kRegionSize);
         const bool rep_string = (input.decoded.instruction.attributes &
