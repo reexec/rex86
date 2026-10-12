@@ -732,10 +732,23 @@ public:
         }
         CheckLowMemoryUnmapped();
 
-        stack_t alternate = {};
-        alternate.ss_size = 1u << 16;
-        alternate.ss_sp = std::malloc(alternate.ss_size);
-        sigaltstack(&alternate, nullptr);
+        // The guest may point ESP anywhere, inside this alternate stack
+        // too. Without SS_AUTODISARM the kernel then takes the process to
+        // be on the alternate stack already, builds the frame below that
+        // ESP, and, near the stack's bottom, kills the process without
+        // calling the handler (#53: v0.0.26's campaign cores show
+        // `mov esp, imm32` and `add esp, [mem]` doing it). SS_AUTODISARM
+        // makes the kernel switch regardless (Linux 4.7, on_sig_stack());
+        // it disarms the stack at each delivery and only sigreturn
+        // re-arms it, so Run arms it again before every case.
+        alternate_.ss_size = 1u << 16;
+        alternate_.ss_sp = std::malloc(alternate_.ss_size);
+        alternate_.ss_flags = kAutodisarm;
+        if (sigaltstack(&alternate_, nullptr) != 0)
+        {
+            std::perror("sigaltstack with SS_AUTODISARM");
+            std::exit(2);
+        }
         struct sigaction action = {};
         action.sa_sigaction = Handler;
         action.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_NODEFER;
@@ -805,6 +818,7 @@ public:
         g_rep_string = rep_string ? 1 : 0;
         g_outcome = HostOutcome{};
         g_armed = 1;
+        sigaltstack(&alternate_, nullptr);  // SS_AUTODISARM: re-arm per case
         if (sigsetjmp(g_jump, 1) == 0)
         {
             Enter();
@@ -846,6 +860,9 @@ private:
         std::fclose(maps);
     }
 
+    // SS_AUTODISARM is in linux/signal.h, not glibc's headers.
+    static constexpr int kAutodisarm = static_cast<int>(1u << 31);
+    stack_t alternate_ = {};
     std::uint8_t* region_ = nullptr;
     std::array<std::uint16_t, 6> selectors_ = {};
 };
