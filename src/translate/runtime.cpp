@@ -294,7 +294,11 @@ const Translation* Translator::Lookup(const CpuState& state, GuestMemory& memory
         case State::kCounting:
             break;
     }
-    if (entry.count < (threshold_ << entry.evictions))
+    // An evicted block's backoff counts from at least one entry, so that a
+    // threshold of 0 (forced translation) backs off too.
+    const std::uint32_t needed =
+        entry.evictions == 0 ? threshold_ : std::max(threshold_, 1u) << entry.evictions;
+    if (entry.count < needed)
     {
         ++entry.count;
         return nullptr;

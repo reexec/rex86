@@ -161,9 +161,9 @@ private:
         // that a change to the code retries.
         std::uint32_t refused_generation = 0;
         // Times the module budget evicted this block: each doubles the
-        // entries it needs before it is translated again, up to
-        // kMaxEvictionShift, so that a working set larger than the budget
-        // does not translate without end (design #49, decision 3).
+        // entries it needs before it is translated again (from at least
+        // one), up to kMaxEvictionShift, so that a working set larger than
+        // the budget does not translate without end (design #49, decision 3).
         std::uint8_t evictions = 0;
         Translation translation;
     };

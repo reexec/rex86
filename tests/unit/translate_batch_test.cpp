@@ -256,8 +256,12 @@ void BudgetTests(rex86::test::Context& context)
     REX86_CHECK_EQ(context, rig.translator->modules_evicted(), std::uint64_t{1});
     REX86_CHECK(context, (rig.log.dropped == std::vector<std::uint32_t>{100, 101}));
     REX86_CHECK_EQ(context, rig.translator->live_modules(), std::size_t{2});
-    // Block 2 still runs; block 0 is counted again and queued.
+    // Block 2 still runs; block 0 is counted again (two entries, its
+    // backoff) and queued.
     REX86_CHECK(context, rig.Enter(Rig::Head(kPageA, 2)) != nullptr);
+    rig.Enter(Rig::Head(kPageA, 0));
+    rig.Enter(Rig::Head(kPageA, 0));
+    REX86_CHECK_EQ(context, rig.translator->queued(), std::size_t{0});
     REX86_CHECK(context, rig.Enter(Rig::Head(kPageA, 0)) == nullptr);
     REX86_CHECK_EQ(context, rig.translator->queued(), std::size_t{1});
 
@@ -296,6 +300,14 @@ void EvictionBackoffTests(rex86::test::Context& context)
     REX86_CHECK(context, enter(Rig::Head(kPageB, 0), 1) != nullptr);  // evicts page A's again
     REX86_CHECK(context, enter(Rig::Head(kPageA, 0), 8) == nullptr);  // 2 << 2 entries
     REX86_CHECK(context, enter(Rig::Head(kPageA, 0), 1) != nullptr);
+
+    // A threshold of 0 backs off from one entry: 1 << 1, then 1 << 2.
+    Rig forced(1, Limits(1000, 1));
+    REX86_CHECK(context, forced.Enter(Rig::Head(kPageA, 0)) != nullptr);
+    REX86_CHECK(context, forced.Enter(Rig::Head(kPageB, 0)) != nullptr);  // evicts page A's
+    REX86_CHECK(context, forced.Enter(Rig::Head(kPageA, 0)) == nullptr);
+    REX86_CHECK(context, forced.Enter(Rig::Head(kPageA, 0)) == nullptr);
+    REX86_CHECK(context, forced.Enter(Rig::Head(kPageA, 0)) != nullptr);  // the third entry
 }
 
 // Flush empties the queue and the module records.
