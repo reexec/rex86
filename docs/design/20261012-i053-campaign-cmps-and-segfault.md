@@ -66,3 +66,26 @@ v0.0.23 tag의 캠페인([실행 38069279391](https://github.com/reexec/rex86/ac
 없다. 바뀌는 것은 호스트 대조 fuzz(`tests/host/linux/`), 캠페인 스크립트, 워크플로다. 코어와 공개 계약은 그대로다.
 
 *None: only the host-comparison fuzz (`tests/host/linux/`), the campaign script and the workflow change; the core and the public contract stay as they are.*
+
+## 결정 3(후속): 세그폴트의 원인과 수정 / Decision 3 (follow-up): the segfault's cause and fix
+
+v0.0.26 tag의 캠페인([실행 38214393370](https://github.com/reexec/rex86/actions/runs/38214393370))에서 int-i386 두 작업의 샤드 0이 다시 signal 11로 죽었다. 러너는 둘 다 AMD EPYC 7763이다. 결정 2의 관측 수단이 core와 바이너리를 남겼고, core를 Python으로 읽어(ELF 노트, NT_FILE, 바이너리의 심볼 표) 원인이 드러났다.
+
+| 작업 | 사례(빵부스러기) | 명령 | 죽을 때의 ESP |
+|---|---|---|---|
+| translate | 1,370,060 | `BC D1 BC D2 57` = `mov esp, 0x57D2BCD1` | 힙 + 0x2BCD1 |
+| warmup-default | 3,765,805 | `03 A7 95 83 3F 98` = `add esp, [edi+0x983F8395]` | 힙 + 0x2BD82 |
+
+- 두 core 모두 `g_armed = 1`, `g_in_handler = 0`이다. 처리기가 한 번도 실행되지 않았다는 뜻이다. siginfo는 SI_KERNEL이다.
+- 두 ESP는 각자의 힙에서 거의 같은 오프셋에 있다. `malloc`으로 잡은 64 KiB 대체 신호 스택의 바닥 근처다.
+- **원인(확인됨)**: 시험 명령이 ESP를 대체 신호 스택 영역 안으로 옮겼다. 그러면 커널(`get_sigframe`)은 "이미 대체 스택 위에 있다"고 보고 스택을 바꾸지 않은 채 그 ESP 아래에 신호 프레임을 쌓는다. ESP가 바닥 근처라 프레임이 대체 스택 밖으로 넘쳤고, 커널은 처리기 없이 SIGSEGV로 프로세스를 끝냈다. 힙 주소는 ASLR로 실행마다 바뀌므로 시드로 재현되지 않았다.
+- **재현(확인됨)**: scratch의 작은 i386 프로그램이 ESP를 대체 스택 바닥 64바이트 위에 두고 INT3을 낸다. 기존 설정에서는 처리기 없이 종료 코드 139로 끝났다(WSL2 커널 6.18). `SS_AUTODISARM`을 켜고 시험마다 다시 등록하면 세 번 모두 처리기가 돌았다.
+
+**결정**:
+- `rex86_int_fuzz`의 대체 스택에 `SS_AUTODISARM`을 켠다. 이 플래그면 `on_sig_stack()`이 거짓을 돌려 커널이 늘 대체 스택 꼭대기로 바꾼다. 커널 주석이 바로 "스택 포인터가 망가져 신호 스택 끝 가까이를 가리킬 때"를 위한 것이라고 적는다.
+- 이 플래그는 전달 때 대체 스택을 해제하고 `sigreturn`에서만 되살린다. 하네스는 `siglongjmp`로 나오므로, `Host::Run`이 시험마다 `sigaltstack`을 다시 부른다.
+- 플래그를 거절하는 커널(4.7 전)에서는 시작할 때 실패를 알리고 끝낸다.
+- SIMD fuzz는 범용 레지스터 피연산자를 EAX로 제한하므로 게스트가 ESP를 바꾸지 못하고, x87 fuzz는 신호로 시험하지 않는다. 둘은 그대로 둔다.
+- 결정 2의 관측 수단은 남긴다. 이번 원인을 찾은 것이 바로 그 core와 빵부스러기였다.
+
+*v0.0.26's tag campaign (run 38214393370) lost shard 0 of two int-i386 jobs to signal 11 again, both on an AMD EPYC 7763; decision 2's observability kept the cores and binary, and reading the cores in Python (ELF notes, NT_FILE, the binary's symbols) showed the cause, as in the table above. Both cores have `g_armed = 1` and `g_in_handler = 0` (the handler never ran) and an SI_KERNEL siginfo, and both ESPs sit at nearly the same offset of their heaps, near the bottom of the 64 KiB alternate signal stack `malloc` placed there. Cause (confirmed): the tested instruction moved ESP into the alternate stack, so the kernel (`get_sigframe`) took the process to be on it already and built the frame below that ESP without switching; near the bottom the frame overflowed and the kernel killed the process with SIGSEGV without the handler, and since ASLR moves the heap, a seed did not reproduce it. Reproduction (confirmed): a small i386 program putting ESP 64 bytes above the alternate stack's bottom and raising INT3 dies with exit code 139 without its handler (WSL2 kernel 6.18), and with `SS_AUTODISARM`, re-armed each time, its handler runs all three times. Decision: give `rex86_int_fuzz`'s alternate stack `SS_AUTODISARM`, under which `on_sig_stack()` answers false and the kernel always switches to the stack's top (the kernel's comment names exactly this case of a stack pointer corrupted to near the end of the signal stack); the flag disarms the stack at delivery and only `sigreturn` re-arms it, so `Host::Run` calls `sigaltstack` again before every test, and a kernel refusing the flag (before 4.7) makes the fuzz fail at start. The SIMD fuzz limits general-purpose operands to EAX, so its guest cannot move ESP, and the x87 fuzz tests without signals; both stay as they are. Decision 2's observability stays: its core and breadcrumbs found this cause.*
