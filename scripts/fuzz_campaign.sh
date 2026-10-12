@@ -63,6 +63,11 @@ mkdir -p "$log_dir"
 cpu=$(cpu_model)
 echo "[rex86-campaign] job=$job shards=$shards cases_per_shard=$cases seed=$seed stride=$stride cpu=\"$cpu\""
 
+# A shard killed by a signal leaves a core file where the system's
+# core_pattern says (the int-i386 job points it into the log directory,
+# #53); the limit only allows it.
+ulimit -c unlimited 2>/dev/null || true
+
 declare -a pids starts
 for (( k = 0; k < shards; ++k )); do
     shard_seed=$(( seed + k * stride ))
@@ -93,6 +98,17 @@ for (( k = 0; k < shards; ++k )); do
     if [ "$status" -ne 0 ]; then
         echo "---- last lines of $log_dir/$job-$k.log ----"
         tail -n 20 "$log_dir/$job-$k.log"
+    fi
+    if [ "$status" -gt 128 ]; then
+        # Killed by a signal: name it, and with a core file and gdb at hand
+        # put the backtrace in the shard's log (#53).
+        echo "[rex86-campaign] job=$job shard=$k died of signal $(( status - 128 ))"
+        core=$(ls -t "$log_dir"/core.* 2>/dev/null | head -n 1)
+        if [ -n "$core" ] && command -v gdb >/dev/null 2>&1; then
+            first=${1//\{SHARD\}/$k}
+            gdb -batch -ex 'info registers' -ex 'bt 40' "$first" "$core" 2>&1 \
+                | tee -a "$log_dir/$job-$k.log" | tail -n 60
+        fi
     fi
 done
 

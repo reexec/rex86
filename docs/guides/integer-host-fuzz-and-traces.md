@@ -37,9 +37,19 @@
    ./build/linux-x86-release/bin/rex86_trace --dump 0 /tmp/f.rxt   # 입력, 기대값, 메모리 변경, 재생 결과
    ```
 
+   **프로세스가 죽을 때**([#53](../design/20261012-i053-campaign-cmps-and-segfault.md)):
+   - stdout은 줄 단위로 버퍼링되므로 죽기 전까지의 출력이 남습니다. `--progress N`은 N건마다 `progress case=… so_far=…`를 씁니다. 캠페인은 250,000을 줍니다.
+   - 처리기 안에서 신호가 다시 나면 `nested signal in the handler`, 게스트 바깥의 폴트면 `outside the guest`를 stderr에 씁니다. 두 메시지 모두 사례 번호와 명령 바이트를 함께 적고, 앞의 것은 종료 코드 97로 끝납니다.
+   - 죽은 지점 근처는 `--from N`으로 바로 재현합니다. 앞의 N건은 생성만 하고 건너뛰므로 입력 순서는 같습니다.
+   - 캠페인의 int-i386 작업은 core 파일과 바이너리를 아티팩트에 남깁니다.
+
+   ```bash
+   ./build/linux-x86-release/bin/rex86_int_fuzz 5000000 2395000002 --translate --from 1250000 --progress 10000
+   ```
+
 4. 새로 확인한 동작은 `docs/analysis/integer-host-comparison.md`에 확인됨/추정/미확정과 측정 호스트(제조사, family/model/stepping)를 밝혀 기록합니다. SDM이 분명하면 코어를 SDM에 맞추고, 침묵하면 실측값을 쓰되 SingleStepTests(386EX)와 충돌하지 않는지 `rex86_sst --execute`로 확인합니다. 세대마다 다른 동작은 마스크하고 분석 문서에 적습니다.
 
-*Build for i386 (with multilib on a 64-bit machine; Release is faster for long runs), run long seeds (the last line's `mismatches` must be 0, `vendor_deviations` counting the analysis topic's vendor deviations, Zen 5's CMPS fault address and Zen 3's BOUND read order, apart and out of `--record`; `--stats` prints retired and faulted counts per mnemonic, `--only <mnemonic>` runs one form), with `--translate` replaying the core side through translation (the IR evaluator, one instruction per block, #46) against the same host expectations; turn mismatches into traces with `--failures <file>` (each `MISMATCH` line names its case number) and spell one out with `rex86_trace --dump`, then record new facts in the analysis topic with their status and the host's vendor and family/model/stepping. Fix the core toward the SDM where it is clear; where it is silent, adopt the measurement after checking `rex86_sst --execute` still agrees with the 386EX; mask what differs between generations and say so in the analysis.*
+*Build for i386 (with multilib on a 64-bit machine; Release is faster for long runs), run long seeds (the last line's `mismatches` must be 0, `vendor_deviations` counting the analysis topic's vendor deviations, Zen 5's CMPS fault address and Zen 3's BOUND read order, apart and out of `--record`; `--stats` prints retired and faulted counts per mnemonic, `--only <mnemonic>` runs one form), with `--translate` replaying the core side through translation (the IR evaluator, one instruction per block, #46) against the same host expectations; turn mismatches into traces with `--failures <file>` (each `MISMATCH` line names its case number) and spell one out with `rex86_trace --dump`, and when the process dies (#53) use what it leaves: line-buffered output with `progress case=… so_far=…` every `--progress N` cases (the campaign uses 250,000), stderr messages naming the case number and bytes for a signal inside the handler (`nested signal in the handler`, exit code 97) or a fault outside the guest, `--from N` to generate and skip the first N cases and reproduce near the death with the same input order, and the core file and binary the campaign's int-i386 jobs keep; then record new facts in the analysis topic with their status and the host's vendor and family/model/stepping. Fix the core toward the SDM where it is clear; where it is silent, adopt the measurement after checking `rex86_sst --execute` still agrees with the 386EX; mask what differs between generations and say so in the analysis.*
 
 ## trace 묶음 다시 만들기 / Regenerating the corpus
 

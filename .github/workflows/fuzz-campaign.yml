@@ -99,13 +99,20 @@ jobs:
           cmake -S . -B build/i386 -G Ninja -DCMAKE_BUILD_TYPE=Release -DREX86_WARNINGS_AS_ERRORS=ON \
             -DCMAKE_C_FLAGS=-m32 -DCMAKE_CXX_FLAGS=-m32 -DCMAKE_EXE_LINKER_FLAGS=-m32 ${{ matrix.cmake_extra }}
           cmake --build build/i386 --target rex86_int_fuzz
+      # A shard killed by a signal leaves its core next to the logs, and the
+      # binary goes with it, for a post-mortem (#53).
+      - name: Keep core files
+        run: |
+          mkdir -p "$CAMPAIGN_LOG_DIR"
+          sudo sysctl -w kernel.core_pattern="$GITHUB_WORKSPACE/$CAMPAIGN_LOG_DIR/core.%e.%p"
       - name: Fuzz
         run: |
           cases=$([ "${{ needs.plan.outputs.scale }}" = full ] && echo 5000000 || echo 20000)
           scripts/fuzz_campaign.sh run int-i386-${{ matrix.variant }} 4 "$cases" \
             $(( ${{ matrix.base }} + ${{ needs.plan.outputs.offset }} )) 1 -- \
             build/i386/bin/rex86_int_fuzz {CASES} {SEED} ${{ matrix.fuzz_extra }} \
-            --failures "$CAMPAIGN_LOG_DIR/int-{SHARD}.rxt"
+            --progress 250000 --failures "$CAMPAIGN_LOG_DIR/int-{SHARD}.rxt" \
+            || { ls "$CAMPAIGN_LOG_DIR"/core.* > /dev/null 2>&1 && cp build/i386/bin/rex86_int_fuzz "$CAMPAIGN_LOG_DIR/"; exit 1; }
       - name: Keep logs and failing cases
         if: always()
         uses: actions/upload-artifact@v7
