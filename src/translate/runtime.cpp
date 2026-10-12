@@ -23,8 +23,9 @@ Translator::~Translator()
     Flush();
 }
 
-void Translator::Forget(Entry* entry, const std::uint32_t head)
+void Translator::Forget(Entry* entry, const std::uint32_t head, const bool keep_evictions)
 {
+    const std::uint8_t evictions = keep_evictions ? entry->evictions : 0;
     switch (entry->state)
     {
         case State::kTranslated:
@@ -45,6 +46,7 @@ void Translator::Forget(Entry* entry, const std::uint32_t head)
             break;
     }
     *entry = Entry{};
+    entry->evictions = evictions;
 }
 
 void Translator::Leave(const std::uint32_t ticket)
@@ -68,7 +70,10 @@ void Translator::EvictOldest()
             (found->second.state == State::kTranslated || found->second.state == State::kPending) &&
             found->second.translation.ticket == ticket)
         {
+            const std::uint8_t evictions = found->second.evictions;
             Forget(&found->second, head);
+            found->second.evictions =
+                static_cast<std::uint8_t>(std::min<unsigned>(evictions + 1u, kMaxEvictionShift));
         }
     }
     modules_.erase(ticket);  // should its count have drifted
@@ -197,7 +202,10 @@ void Translator::Submit(const GuestMemory& memory)
         Entry& entry = entries_.find(head)->second;
         if (!StillValid(entry.translation.block, memory))
         {
-            entry = Entry{};  // changed while queued: counted again
+            // Changed while queued: counted again.
+            const std::uint8_t evictions = entry.evictions;
+            entry = Entry{};
+            entry.evictions = evictions;
             continue;
         }
         heads.push_back(head);
@@ -270,7 +278,7 @@ const Translation* Translator::Lookup(const CpuState& state, GuestMemory& memory
             {
                 return &entry.translation;
             }
-            Forget(&entry, state.eip);
+            Forget(&entry, state.eip, true);
             break;
         case State::kQueued:
         case State::kPending:
@@ -286,7 +294,7 @@ const Translation* Translator::Lookup(const CpuState& state, GuestMemory& memory
         case State::kCounting:
             break;
     }
-    if (entry.count < threshold_)
+    if (entry.count < (threshold_ << entry.evictions))
     {
         ++entry.count;
         return nullptr;

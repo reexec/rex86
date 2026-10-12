@@ -16,7 +16,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const kRunnerFiles = ['index.html', 'suite.js', 'worker.js', 'main.html', 'report.mjs'];
+// module_limit.{html,js}: the module limit probe (design #49), for real devices.
+const kRunnerFiles = ['index.html', 'suite.js', 'worker.js', 'main.html', 'report.mjs', 'module_limit.html',
+  'module_limit.js'];
 const kRequiredRunnerFiles = ['index.html', 'suite.js', 'worker.js'];
 const kRootFiles = ['index.html', 'compare.html', 'compare.js'];
 const kBinExtensions = new Set(['.js', '.wasm', '.data', '.json']);

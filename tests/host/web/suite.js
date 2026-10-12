@@ -6,11 +6,12 @@
 //
 // Firefox gives back wasm code memory only at a garbage collection, which
 // code memory pressure itself does not start, and a process holds about
-// 16,000 live modules; the tools that install a module per case approach
-// that, and a finished Worker's modules linger. The suite therefore waits
-// between tests, and a run that failed only for want of memory (an
-// out-of-memory line, and no mismatch other than a refused installation) is
-// started again after a longer wait; the report counts such retries.
+// 16,000 modules, a finished Worker's lingering a while. Since the tools
+// install 16 blocks per module (design #49) the suite passes in Firefox
+// with no wait at all; it still waits a second between tests, and a run
+// that failed only for want of memory (an out-of-memory line, and no
+// mismatch other than a refused installation) is started again after a
+// longer wait; the report counts such retries.
 //
 // index.html?only=unit,irdiff runs the named tests only; settle=ms changes
 // the wait between tests.
@@ -33,9 +34,9 @@ function suite(traces) {
   const bench = (engine) => ({ name: `bench-${engine}`, tool: 'rex86_bench', args: ['--engine', engine] });
   return [
     { name: 'unit', tool: 'rex86_unit_tests', args: [] },
-    // Node's ctest runs 20,000 cases; fewer here keep the module count under
-    // Firefox's limit (see above).
-    { name: 'irdiff', tool: 'rex86_irdiff', args: ['--cases', '5000'] },
+    // Node's ctest's 20,000 cases: the wasm comparisons install 16 blocks per
+    // module (design #49), some 1,500 modules in all.
+    { name: 'irdiff', tool: 'rex86_irdiff', args: ['--cases', '20000'] },
     { name: 'robust', tool: 'rex86_robust', args: ['--cases', '300'] },
     { name: 'trace', tool: 'rex86_trace', args: traces },
     { name: 'probe', tool: 'rex86_probe', args: [] },
@@ -122,7 +123,7 @@ async function main() {
     const manifest = await response.json();
     const params = new URL(location.href).searchParams;
     const only = params.get('only')?.split(',').filter(Boolean);
-    const settleMs = Number(params.get('settle') ?? 5000);
+    const settleMs = Number(params.get('settle') ?? 1000);
     const tests = suite(manifest.traces).filter((test) => !only || only.includes(test.name));
     const body = document.querySelector('#tests tbody');
     for (const test of tests) {

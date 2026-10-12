@@ -160,8 +160,15 @@ private:
         // For kUntranslatable: the head's page generation when refused, so
         // that a change to the code retries.
         std::uint32_t refused_generation = 0;
+        // Times the module budget evicted this block: each doubles the
+        // entries it needs before it is translated again, up to
+        // kMaxEvictionShift, so that a working set larger than the budget
+        // does not translate without end (design #49, decision 3).
+        std::uint8_t evictions = 0;
         Translation translation;
     };
+
+    static constexpr std::uint8_t kMaxEvictionShift = 6;
 
     // A submitted batch (design #49, decision 3): its blocks' heads in
     // batch order, and how many of them still hold its code.
@@ -173,8 +180,10 @@ private:
 
     static bool StillValid(const ir::Block& block, const GuestMemory& memory);
     // Resets the entry of the block at head, telling the backend, the batch
-    // queue and the module records about what it held.
-    void Forget(Entry* entry, std::uint32_t head);
+    // queue and the module records about what it held. A block whose code
+    // changed keeps its eviction count: the budget's backoff is about the
+    // block's place, not its code.
+    void Forget(Entry* entry, std::uint32_t head, bool keep_evictions = false);
     void Translate(Entry* entry, const CpuState& state, GuestMemory& memory,
                    const Features& features, const interp::GateFilter* gates);
     // Hands the queued blocks still valid to the backend as one batch.

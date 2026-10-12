@@ -271,6 +271,33 @@ void BudgetTests(rex86::test::Context& context)
     REX86_CHECK_EQ(context, left.translator->modules_evicted(), std::uint64_t{0});
 }
 
+// An evicted block needs twice the entries before it is translated again,
+// so that a working set beyond the budget does not translate without end.
+void EvictionBackoffTests(rex86::test::Context& context)
+{
+    translate::TranslatorLimits limits = Limits(1000, 1);
+    limits.threshold = 2;
+    Rig rig(1, limits);
+    const auto enter = [&rig](const std::uint32_t head, const int times) {
+        const translate::Translation* last = nullptr;
+        for (int i = 0; i < times; ++i)
+        {
+            last = rig.Enter(head);
+        }
+        return last;
+    };
+    REX86_CHECK(context, enter(Rig::Head(kPageA, 0), 2) == nullptr);
+    REX86_CHECK(context, enter(Rig::Head(kPageA, 0), 1) != nullptr);  // the third entry
+    REX86_CHECK(context, enter(Rig::Head(kPageB, 0), 3) != nullptr);  // evicts page A's
+    REX86_CHECK_EQ(context, rig.translator->modules_evicted(), std::uint64_t{1});
+    REX86_CHECK(context, enter(Rig::Head(kPageA, 0), 4) == nullptr);  // 2 << 1 entries
+    REX86_CHECK(context, enter(Rig::Head(kPageA, 0), 1) != nullptr);  // evicts page B's
+    REX86_CHECK(context, enter(Rig::Head(kPageB, 0), 4) == nullptr);
+    REX86_CHECK(context, enter(Rig::Head(kPageB, 0), 1) != nullptr);  // evicts page A's again
+    REX86_CHECK(context, enter(Rig::Head(kPageA, 0), 8) == nullptr);  // 2 << 2 entries
+    REX86_CHECK(context, enter(Rig::Head(kPageA, 0), 1) != nullptr);
+}
+
 // Flush empties the queue and the module records.
 void FlushTests(rex86::test::Context& context)
 {
@@ -296,5 +323,6 @@ void RunTranslateBatchTests(rex86::test::Context& context)
     StaleQueueTests(context);
     PendingBatchTests(context);
     BudgetTests(context);
+    EvictionBackoffTests(context);
     FlushTests(context);
 }

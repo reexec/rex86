@@ -132,16 +132,14 @@ if (options.moduleLimit) {
         `cap=${limit.cap} modules=${limit.modules} ended=${reached} ms=${limit.ms} error="${limit.error}"`);
       rows.push(`| ${name} ${version} | ${limit.modules} | ${reached} | ${limit.error} |`);
     } catch (error) {
-      console.log(`[rex86-browser] browser=${name} module_limit result=fail runner_error="${String(error).split('
-')[0]}"`);
+      console.log(`[rex86-browser] browser=${name} module_limit result=fail runner_error="${String(error).split('\n')[0]}"`);
       probeFailed = true;
     }
   }
   server.close();
   if (process.env.GITHUB_STEP_SUMMARY) {
     fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, ['## wasm module limit', '',
-      '| browser | modules | ended | error |', '|---|---|---|---|', ...rows, ''].join('
-'));
+      '| browser | modules | ended | error |', '|---|---|---|---|', ...rows, ''].join('\n'));
   }
   process.exit(probeFailed ? 1 : 0);
 }
