@@ -203,7 +203,7 @@ void WorkloadTests(rex86::test::Context& context)
     Image image;
     std::string error;
     REX86_CHECK(context, rex86::bench::BuildImage(&image, &error));
-    REX86_CHECK_EQ(context, image.workloads.size(), std::size_t{6});
+    REX86_CHECK_EQ(context, image.workloads.size(), std::size_t{7});
     REX86_CHECK(context, image.code.size() <= rex86::bench::kCodeSize);
 
     // The reference models are what the design states.
@@ -216,7 +216,8 @@ void WorkloadTests(rex86::test::Context& context)
         std::uint32_t expected = 0;
         for (const Workload& workload : image.workloads)
         {
-            if (workload.name != "mixed")
+            // mixed holds the five kernels before blocks (design #49).
+            if (workload.name != "mixed" && workload.name != "blocks")
             {
                 expected ^= workload.expected_edi;
             }
@@ -224,6 +225,10 @@ void WorkloadTests(rex86::test::Context& context)
         REX86_CHECK_EQ(context, mixed->expected_edi, expected);
     }
     REX86_CHECK(context, rex86::bench::FindWorkload(image, "none") == nullptr);
+    // blocks: the sum of (i * 37 + 11) & 0x7F over its blocks, which runs
+    // through every residue 128 times in 24,576 blocks.
+    REX86_CHECK_EQ(context, rex86::bench::KernelModel(rex86::bench::Kernel::kBlocks),
+                   192u * (127u * 128u / 2u));
 
     // Every workload completes two laps on the core matching the model with
     // a deterministic retired count.

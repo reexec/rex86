@@ -25,9 +25,12 @@ WasmInstall WebWasmModuleServices::Install(std::uint32_t, const std::uint8_t* by
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     if (ok == 0)
     {
+        ++failed_;
         return WasmInstall::kFailed;
     }
     ++installed_;
+    installed_bytes_ += size;
+    installed_functions_ += export_count;
     return WasmInstall::kInstalled;
 }
 

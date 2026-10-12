@@ -163,6 +163,7 @@ void WasmRunTests(rex86::test::Context& context)
     options.mode = rex86::TranslationMode::kWasm;
     options.threshold = 0;
     options.wasm = &services;
+    options.blocks_per_module = 1;  // batches have their own test
 
     Rig interpreted(kLoop);
     Rig translated(kLoop);
@@ -176,8 +177,10 @@ void WasmRunTests(rex86::test::Context& context)
     REX86_CHECK(context, services.installed() >= 1);
 
     // An installer that answers later: the interpreter runs until then.
+    // One block per module, so that each request is one block.
     DeferringServices deferring;
     options.wasm = &deferring;
+    options.blocks_per_module = 1;
     Rig deferred(kLoop);
     REX86_CHECK(context, deferred.cpu.SetTranslation(options));
     deferred.cpu.Run(200);
@@ -215,6 +218,95 @@ void WasmRunTests(rex86::test::Context& context)
     REX86_CHECK(context, SameMachine(interpreted, failed));
 }
 
+// mov ecx, 30; L: 40 blocks of (add eax, imm8; jmp short +1; int3); dec ecx;
+// jnz L (rel32); hlt
+std::vector<std::uint8_t> ManyBlocks()
+{
+    std::vector<std::uint8_t> code = {0xB9, 0x1E, 0x00, 0x00, 0x00};
+    for (std::uint8_t i = 0; i < 40; ++i)
+    {
+        code.insert(code.end(), {0x83, 0xC0, static_cast<std::uint8_t>(i * 3 + 1), 0xEB, 0x01, 0xCC});
+    }
+    code.push_back(0x49);
+    const auto after = static_cast<std::int32_t>(code.size() + 6);
+    const std::uint32_t rel = static_cast<std::uint32_t>(5 - after);
+    code.insert(code.end(), {0x0F, 0x85, static_cast<std::uint8_t>(rel), static_cast<std::uint8_t>(rel >> 8),
+                             static_cast<std::uint8_t>(rel >> 16), static_cast<std::uint8_t>(rel >> 24)});
+    code.push_back(0xF4);
+    return code;
+}
+
+void Load(Rig* rig, const std::vector<std::uint8_t>& code)
+{
+    std::copy(code.begin(), code.end(), rig->buffer.begin() + kCode);
+}
+
+// Batched modules (design #49): several blocks per module, a module budget
+// small enough to evict, and asynchronous batches answered later. Results
+// match the interpreter throughout.
+void WasmBatchTests(rex86::test::Context& context)
+{
+    const std::vector<std::uint8_t> code = ManyBlocks();
+    Rig interpreted(std::initializer_list<std::uint8_t>{});
+    Load(&interpreted, code);
+    const rex86::Event a = interpreted.cpu.Run(1000000);
+    REX86_CHECK(context, a.reason == rex86::StopReason::kHalted);
+
+    rex86::host::web::WebWasmModuleServices services;
+    rex86::TranslationOptions options;
+    options.mode = rex86::TranslationMode::kWasm;
+    options.threshold = 2;
+    options.wasm = &services;
+    options.blocks_per_module = 4;
+    options.batch_wait = 64;
+    options.max_modules = 3;
+    Rig translated(std::initializer_list<std::uint8_t>{});
+    Load(&translated, code);
+    REX86_CHECK(context, translated.cpu.SetTranslation(options));
+    const rex86::Event b = translated.cpu.Run(1000000);
+    REX86_CHECK(context, b.reason == a.reason);
+    REX86_CHECK_EQ(context, b.steps, a.steps);
+    REX86_CHECK(context, SameMachine(interpreted, translated));
+    const rex86::TranslationStats stats = translated.cpu.translation_stats();
+    REX86_CHECK(context, stats.translated_steps > 0);
+    REX86_CHECK(context, stats.modules_submitted >= 10);
+    REX86_CHECK(context, stats.modules_evicted >= 1);
+    REX86_CHECK(context, services.installed_functions() > services.installed());
+
+    // Asynchronous batches: each request carries several blocks.
+    DeferringServices deferring;
+    options.wasm = &deferring;
+    options.max_modules = 0;
+    Rig deferred(std::initializer_list<std::uint8_t>{});
+    Load(&deferred, code);
+    REX86_CHECK(context, deferred.cpu.SetTranslation(options));
+    std::uint32_t most_exports = 0;
+    rex86::Event c;
+    do
+    {
+        c = deferred.cpu.Run(500);
+        for (const DeferringServices::Request& request : deferring.waiting)
+        {
+            most_exports = std::max(most_exports, request.export_count);
+            std::vector<std::uint32_t> indices(request.export_count);
+            if (deferring.real.Install(request.ticket, request.bytes, request.size, request.export_count,
+                                       indices.data()) == rex86::WasmInstall::kInstalled)
+            {
+                deferred.cpu.CompleteWasmModule(request.ticket, indices.data(), request.export_count);
+            }
+            else
+            {
+                deferred.cpu.FailWasmModule(request.ticket);
+            }
+        }
+        deferring.waiting.clear();
+    } while (c.reason == rex86::StopReason::kBudgetExhausted);
+    REX86_CHECK(context, c.reason == a.reason);
+    REX86_CHECK(context, SameMachine(interpreted, deferred));
+    REX86_CHECK_EQ(context, most_exports, std::uint32_t{4});
+    REX86_CHECK(context, deferred.cpu.translation_stats().block_runs > 0);
+}
+
 #endif
 
 }  // namespace
@@ -224,5 +316,6 @@ void RunWasmBackendTests(rex86::test::Context& context)
     ModuleFormatTests(context);
 #if defined(REX86_HOST_WEB)
     WasmRunTests(context);
+    WasmBatchTests(context);
 #endif
 }

@@ -2,8 +2,9 @@
 // Runs the per-form and the block differential from a seed and reports one
 // [rex86-irdiff] line each, with the first mismatch when there is one.
 //
-// Usage: rex86_irdiff [--cases N] [--seed S] [--verbose]
-//   --cases N   cases per differential (default 100000); blocks run N / 4
+// Usage: rex86_irdiff [--cases N] [--seed S] [--wasm-batch B] [--verbose]
+//   --cases N        cases per differential (default 100000); blocks run N / 4
+//   --wasm-batch B   blocks per generated wasm module (default 16, 1 to 64)
 
 #include <cstdio>
 #include <cstdlib>
@@ -22,12 +23,13 @@ void Print(const char* kind, const rex86::irdiff::Options& options,
            const rex86::irdiff::Stats& stats)
 {
     std::printf("[rex86-irdiff] kind=%s seed=%llu cases=%llu compared=%llu exited=%llu "
-                "mnemonics=%zu wasm_runs=%llu mismatches=%llu\n",
+                "mnemonics=%zu wasm_runs=%llu wasm_modules=%llu mismatches=%llu\n",
                 kind, static_cast<unsigned long long>(options.seed),
                 static_cast<unsigned long long>(stats.cases),
                 static_cast<unsigned long long>(stats.compared),
                 static_cast<unsigned long long>(stats.exited), stats.compared_by_mnemonic.size(),
                 static_cast<unsigned long long>(stats.wasm_runs),
+                static_cast<unsigned long long>(stats.wasm_modules),
                 static_cast<unsigned long long>(stats.mismatches));
     if (stats.mismatches != 0)
     {
@@ -56,13 +58,17 @@ int main(int argc, char** argv)
         {
             options.seed = std::strtoull(argv[++i], nullptr, 0);
         }
+        else if (std::strcmp(argv[i], "--wasm-batch") == 0 && has_value)
+        {
+            options.wasm_batch = static_cast<unsigned>(std::strtoul(argv[++i], nullptr, 0));
+        }
         else if (std::strcmp(argv[i], "--verbose") == 0)
         {
             options.verbose = true;
         }
         else
         {
-            std::fprintf(stderr, "usage: rex86_irdiff [--cases N] [--seed S] [--verbose]\n");
+            std::fprintf(stderr, "usage: rex86_irdiff [--cases N] [--seed S] [--wasm-batch B] [--verbose]\n");
             return 2;
         }
     }
