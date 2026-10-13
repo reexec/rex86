@@ -7,9 +7,12 @@
 //
 //   node drive_pages.mjs --site <dir> --compare A,B [--expect ok|fail]
 //                        [--browsers chromium,firefox] [--rounds N] [--frames N|default]
+//                        [--control on|off]
 //
 // --expect fail serves the version check: a directory named for a version
-// its build does not report must fail the comparison.
+// its build does not report must fail the comparison. --control on (the
+// default) also checks that every workload row carries the A/A control's
+// ratio (#59).
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -21,7 +24,7 @@ const kTimeoutMs = 30 * 60 * 1000;
 const engines = { chromium, firefox, webkit };
 
 function parseArguments(argv) {
-  const options = { site: null, compare: null, expect: 'ok', browsers: ['chromium'], rounds: '1', frames: '2' };
+  const options = { site: null, compare: null, expect: 'ok', browsers: ['chromium'], rounds: '1', frames: '2', control: 'on' };
   for (let i = 0; i < argv.length; i += 2) {
     const value = argv[i + 1];
     if (argv[i] === '--site' && value) {
@@ -34,6 +37,8 @@ function parseArguments(argv) {
       options.browsers = value.split(',').filter(Boolean);
     } else if (argv[i] === '--rounds' && /^[1-7]$/.test(value ?? '')) {
       options.rounds = value;
+    } else if (argv[i] === '--control' && (value === 'on' || value === 'off')) {
+      options.control = value;
     } else if (argv[i] === '--frames' && /^([1-9][0-9]*|default)$/.test(value ?? '')) {
       options.frames = value;
     } else {
@@ -50,7 +55,7 @@ async function waitFor(page, global) {
   return page.evaluate((name) => window[name], global);
 }
 
-async function checkBrowser(name, origin, versions, { compare, expect, rounds, frames }) {
+async function checkBrowser(name, origin, versions, { compare, expect, rounds, frames, control }) {
   const browser = await engines[name].launch();
   const prefix = `[rex86-pages] browser=${name}`;
   const failures = [];
@@ -81,7 +86,7 @@ async function checkBrowser(name, origin, versions, { compare, expect, rounds, f
 
     await page.goto(`${origin}/compare.html?a=${a}&b=${b}&rounds=${rounds}` +
       (frames === 'default' ? '' : `&frames=${frames}`) +
-      '&engines=interpreter,wasm&settle=0&autostart=1');
+      `&control=${control === 'on' ? 1 : 0}&engines=interpreter,wasm&settle=0&autostart=1`);
     const result = await waitFor(page, 'rex86Compare');
     for (const line of result.lines) {
       console.log(`${prefix} ${line}`);
@@ -91,6 +96,18 @@ async function checkBrowser(name, origin, versions, { compare, expect, rounds, f
       `${result.error ? ` error="${result.error}"` : ''} result=${got === expect ? 'ok' : 'fail'}`);
     if (got !== expect) {
       failures.push('compare');
+    }
+    // The control's figures: every workload row of a passing comparison
+    // carries A2/A when the control is on, and none when it is off.
+    if (got === 'ok') {
+      const rows = result.lines.filter((line) => / workload=\S+ a_mips=/.test(line));
+      const carried = rows.filter((line) => / control_ratio=[0-9.]+ /.test(line)).length;
+      const controlOk = rows.length > 0 && carried === (control === 'on' ? rows.length : 0);
+      console.log(`${prefix} check=control control=${control} rows=${rows.length} with_ratio=${carried} ` +
+        `result=${controlOk ? 'ok' : 'fail'}`);
+      if (!controlOk) {
+        failures.push('control');
+      }
     }
     if (pageErrors.length) {
       console.log(`${prefix} page_errors="${pageErrors.join('; ')}"`);
@@ -105,7 +122,7 @@ async function checkBrowser(name, origin, versions, { compare, expect, rounds, f
 const options = parseArguments(process.argv.slice(2));
 if (!options) {
   console.error('usage: node drive_pages.mjs --site <dir> --compare A,B [--expect ok|fail] ' +
-    '[--browsers chromium,firefox,webkit] [--rounds N] [--frames N|default]');
+    '[--browsers chromium,firefox,webkit] [--rounds N] [--frames N|default] [--control on|off]');
   process.exit(2);
 }
 const listFile = path.join(options.site, 'versions.json');

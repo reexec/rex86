@@ -305,6 +305,11 @@ if(REX86_BUILD_TESTS)
 
     add_executable(rex86_robust src/tools/robust/main.cpp)
     target_link_libraries(rex86_robust PRIVATE rex86_robust_lib rex86_warnings)
+    # The watchdog's second thread (#59); wasm32 without pthreads has none.
+    if(NOT EMSCRIPTEN)
+        find_package(Threads REQUIRED)
+        target_link_libraries(rex86_robust PRIVATE Threads::Threads)
+    endif()
     if(REX86_LIBFUZZER)
         add_executable(rex86_robust_libfuzzer src/tools/robust/libfuzzer.cpp)
         target_link_libraries(rex86_robust_libfuzzer PRIVATE rex86_robust_lib rex86_warnings)
@@ -428,6 +433,11 @@ if(REX86_BUILD_TESTS)
         add_test(NAME rex86_probe COMMAND rex86_probe)
         add_test(NAME rex86_bench_smoke COMMAND rex86_bench --smoke)
         add_test(NAME rex86_robust_smoke COMMAND rex86_robust --cases 300)
+        # The watchdog reports a case stalled past its limit (#59).
+        add_test(NAME rex86_robust_watchdog
+            COMMAND rex86_robust --cases 1 --case-seconds 1 --test-stall-ms 3000)
+        set_tests_properties(rex86_robust_watchdog PROPERTIES
+            PASS_REGULAR_EXPRESSION "VIOLATION seed=1: watchdog")
         add_test(NAME rex86_irdiff_smoke COMMAND rex86_irdiff --cases 20000)
         if(REX86_TRACE_CORPUS)
             add_test(NAME rex86_trace_corpus COMMAND rex86_trace ${REX86_TRACE_CORPUS})

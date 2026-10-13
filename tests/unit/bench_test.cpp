@@ -203,7 +203,7 @@ void WorkloadTests(rex86::test::Context& context)
     Image image;
     std::string error;
     REX86_CHECK(context, rex86::bench::BuildImage(&image, &error));
-    REX86_CHECK_EQ(context, image.workloads.size(), std::size_t{7});
+    REX86_CHECK_EQ(context, image.workloads.size(), std::size_t{8});
     REX86_CHECK(context, image.code.size() <= rex86::bench::kCodeSize);
 
     // The reference models are what the design states.
@@ -216,8 +216,8 @@ void WorkloadTests(rex86::test::Context& context)
         std::uint32_t expected = 0;
         for (const Workload& workload : image.workloads)
         {
-            // mixed holds the five kernels before blocks (design #49).
-            if (workload.name != "mixed" && workload.name != "blocks")
+            // mixed holds the five kernels before blocks (design #49) and smc (#60).
+            if (workload.name != "mixed" && workload.name != "blocks" && workload.name != "smc")
             {
                 expected ^= workload.expected_edi;
             }

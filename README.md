@@ -172,10 +172,14 @@ Windows는 `cmake -S . -B build -A Win32`, Linux i386은 `linux-x86-debug` prese
 ```cmake
 FetchContent_Declare(rex86
     GIT_REPOSITORY https://github.com/reexec/rex86.git
-    GIT_TAG v0.0.2)
+    GIT_TAG v0.0.28)
 FetchContent_MakeAvailable(rex86)
 target_link_libraries(your_target PRIVATE rex86::core)
 ```
+
+`GIT_TAG`에는 fuzz 캠페인이 녹색인 release tag를 씁니다. 캠페인 결과는 다음 릴리스 노트의 검증 절과 [Actions의 fuzz-campaign](https://github.com/reexec/rex86/actions/workflows/fuzz-campaign.yml)에 있습니다.
+
+*Pin `GIT_TAG` to a release tag whose fuzz campaign is green; the result is in the next release notes' validation section and in Actions' fuzz-campaign.*
 
 코어와 소비자를 함께 고칠 때는 `-DFETCHCONTENT_SOURCE_DIR_REX86=../rex86`으로 형제 체크아웃을 가리킵니다.
 

@@ -385,11 +385,12 @@ int main(int argc, char** argv)
             refused = wasm_services.failed() - refused_before;
 #endif
             std::printf("[rex86-bench] workload=%s modules_submitted=%llu modules_evicted=%llu "
-                        "modules_refused=%llu\n",
+                        "modules_refused=%llu blocks_invalidated=%llu\n",
                         result.name.c_str(),
                         static_cast<unsigned long long>(result.translation.modules_submitted),
                         static_cast<unsigned long long>(result.translation.modules_evicted),
-                        static_cast<unsigned long long>(refused));
+                        static_cast<unsigned long long>(refused),
+                        static_cast<unsigned long long>(result.translation.blocks_invalidated));
         }
         std::fflush(stdout);
         ok = ok && result.verified;

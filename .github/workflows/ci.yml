@@ -29,7 +29,7 @@ jobs:
 
   linux-x64:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     strategy:
       matrix:
         compiler: [gcc, clang]
@@ -54,7 +54,7 @@ jobs:
   # the default.
   linux-x64-sanitize:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - name: Install build dependencies
@@ -72,7 +72,7 @@ jobs:
   # included, runs through translation.
   linux-x64-translate:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - name: Install build dependencies
@@ -92,7 +92,7 @@ jobs:
   # (#37).
   linux-x64-libfuzzer:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - name: Install build dependencies
@@ -120,15 +120,18 @@ jobs:
   # A 32-bit x86 host, in the i386 Debian container re2DJ's release uses.
   # JavaScript actions cannot run inside a 32-bit container, so only the
   # build and test go into it. Its ctest includes the integer host fuzz,
-  # which needs an i386 process (design #22, decision 1).
+  # which needs an i386 process (design #22, decision 1). The container
+  # runs without seccomp: on the Ubuntu 26.04 image Docker's default profile
+  # fails an i386 process's socket calls with ENOSYS, so apt reaches nothing
+  # (#59).
   linux-x86:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - name: Build and test in an i386 container
         run: >-
-          docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src i386/debian:bookworm
+          docker run --rm --security-opt seccomp=unconfined -v "$GITHUB_WORKSPACE:/src" -w /src i386/debian:bookworm
           setarch i686 bash -c '
           set -euo pipefail;
           apt-get update;
@@ -144,7 +147,7 @@ jobs:
   # the probe's lines are the first such comparison.
   linux-arm64:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     steps:
       - uses: actions/checkout@v7
       - name: Install build dependencies
@@ -162,7 +165,7 @@ jobs:
   # host that cannot execute x86 at all, which is the whole point of it.
   wasm32:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - uses: mymindstorm/setup-emsdk@v16
@@ -198,7 +201,7 @@ jobs:
   # each running the whole browser suite of tests/host/web.
   browsers:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - uses: mymindstorm/setup-emsdk@v16

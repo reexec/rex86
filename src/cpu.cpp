@@ -152,6 +152,7 @@ TranslationStats Cpu::translation_stats() const
         stats.blocks_translated = translator_->translated_count();
         stats.modules_submitted = translator_->modules_submitted();
         stats.modules_evicted = translator_->modules_evicted();
+        stats.blocks_invalidated = translator_->invalidated_count();
     }
     return stats;
 }

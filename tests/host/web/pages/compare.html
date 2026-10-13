@@ -55,6 +55,7 @@
   .fail, .worse { color: var(--fail); }
   .running { color: var(--running); }
   .better, .worse { font-weight: 600; }
+  .unsteady { color: var(--running); font-style: italic; }
   textarea {
     box-sizing: border-box;
     width: 100%;
@@ -71,7 +72,7 @@
 <body>
 <p class="muted"><a href="./">← versions</a></p>
 <h1>Compare two versions</h1>
-<p class="muted">Runs both versions' benchmark on this device, alternating which goes first each round, and shows the median MIPS per workload. MIPS differ between devices, so only a comparison on one device shows an improvement. B/A is colored only past ±5% when no run of A overlaps a run of B; a version compared with itself shows this device's variation. Keep the screen on and this tab in front.</p>
+<p class="muted">Runs both versions' benchmark on this device, alternating which goes first each round, and shows the median MIPS per workload. MIPS differ between devices, so only a comparison on one device shows an improvement. B/A is colored only past ±5% when no run of A overlaps a run of B; a version compared with itself shows this device's variation. The A/A control runs A once more (A2) in the same session: a row is colored only when A2/A would not be and B/A moves further from 1 than A2/A, and a row whose A2/A would be colored shows in italics as unsteady. Keep the screen on and this tab in front.</p>
 <p id="agent" class="muted"></p>
 <form id="form">
   <label for="a">Version A</label><select id="a"></select>
@@ -86,6 +87,8 @@
   <select id="rounds">
     <option>1</option><option>2</option><option>3</option><option>4</option><option selected>5</option><option>6</option><option>7</option>
   </select>
+  <span>Control</span>
+  <label><input type="checkbox" id="control" checked> A/A control (A runs twice, half again as long)</label>
   <button id="start" type="submit">Start</button>
 </form>
 <p id="status" class="muted">pick two versions and start</p>

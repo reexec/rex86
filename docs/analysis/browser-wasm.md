@@ -125,6 +125,35 @@ Emscripten 테스트 도구를 실제 브라우저에서 돌린 결과다. 대�
 
 *The suite and tools: the browser suite's IR differential rose to 20,000 cases (as Node's ctest), its wasm comparisons installing 16 blocks per module; Chromium and Firefox passed 10/10 with no retry, Firefox also 10/10 with no retry three times out of three with no wait between tests (where #48's zero wait failed), so the suite's default wait went from 5 seconds to 1. On Node, `rex86_irdiff --cases 500000 --seed 2490000000` found no mismatch over 500,000 forms (489,139 wasm runs, 30,572 modules) and 125,001 blocks (7,813 modules).*
 
+### 3.2 모듈 수와 처리량(#60) / Module count against throughput (#60)
+
+근거: [#60 설계](../design/20261013-i060-retranslation-backoff.md) 결정 4, [로그](../work-logs/20261013-i060-retranslation-backoff.md). 호스트 F(Intel Core i5-7200U, Windows 10의 WSL2 Ubuntu 24.04), emsdk 6.0.8, Node 24.19.0, Playwright의 headless Chromium 153과 Firefox(Linux 빌드). 2026-10-13. 이 기계는 실행 간 변동이 커서 값은 범위로 적는다.
+
+*Grounds: the #60 design, decision 4, and log. Host F (Intel Core i5-7200U, WSL2 Ubuntu 24.04 under Windows 10), emsdk 6.0.8, Node 24.19.0, Playwright's headless Chromium 153 and Firefox (Linux builds), 2026-10-13; this machine varies much run to run, so figures are ranges.*
+
+**`blocks`, 묶음 16과 64를 번갈아 세 번씩**(MIPS, 기본 20프레임):
+
+| 엔진 / engine | 16 | 64 |
+|---|---:|---:|
+| Chromium | 3.32–4.45 | 4.22–5.30 |
+| Firefox | 2.53–2.89 | 3.67–3.89 |
+| Node | 3.96–4.43 | 5.17–5.25 |
+
+**설치와 그 뒤를 나눔**(Node, 40프레임, 두 번씩):
+
+| 묶음 / batch | 모듈 / modules | 설치 / install | 프레임 p50 / frame p50 | 첫 프레임 / first frame |
+|---|---:|---:|---:|---:|
+| 16 | 1,537 | 512–757 ms | 115–118 ms | 528–687 ms |
+| 64 | 385 | 305–338 ms | 97–101 ms | 688–853 ms |
+
+* **확인됨**: 3.1절(호스트 E)과 같은 방향이다. 블록이 많은 워크로드에서는 묶음 64가 16보다 빠르다.
+* **확인됨**: 차이의 일부만 설치 비용이다. 모든 블록이 설치된 뒤의 프레임(p50)도 64가 약 14% 빠르다. 살아 있는 모듈이 많을수록 블록 호출이 느려진다는 뜻이다. 엔진 내부의 원인(인스턴스 전환 등)은 확인하지 않았다(**추정**).
+* **확인됨**: 대가로 첫 프레임이 늦어진다(모듈 하나의 설치가 길어짐, 모듈당 333~493 µs에서 793~877 µs).
+* **확인됨**(단발): 작업 집합이 모듈 예산(4,096)을 넘는 묶음 1과 4에서는 축출이 계속 돈다. `blocks`가 Chromium 0.50과 1.39, Firefox 0.49와 1.00 MIPS로 인터프리터(1.92, 1.38)보다 느렸다. #49의 축출 억제가 상한(64배)에 닿아도 그렇다. 기본값(묶음 16)으로는 블록 6만 5천 개까지 축출이 없다.
+* 기본값은 바꾸지 않았다. 묶음을 키우는 것은 첫 프레임과 맞바꾸는 선택이라, 실제 소비자 게스트의 측정과 함께 정한다.
+
+*Confirmed: the direction of section 3.1 (host E): with many blocks, 64-block batches beat 16. Only part of it is installation: once every block is installed, frames (p50) still run some 14% faster at 64, so more live modules make block calls slower; the engine-side cause (switching instances, say) was not examined (inferred). The price is a later first frame, one module's installation taking longer (333 to 493 µs a module against 793 to 877 µs). Single runs: at batch sizes 1 and 4 the working set exceeds the module budget (4,096) and eviction keeps going, `blocks` running at 0.50 and 1.39 MIPS in Chromium and 0.49 and 1.00 in Firefox, below the interpreter (1.92, 1.38), even with #49's backoff at its 64-fold cap; at the default (16) nothing is evicted up to 65,000 blocks. The defaults stay: a larger batch trades the first frame away, to be decided with measurements of a real consumer guest.*
+
 ## 4. 처리량 / Throughput
 
 **확인됨**: 호스트 D, 위 빌드, Worker 안의 `rex86_bench`(20프레임, 기본 설정)다. 브라우저를 번갈아 세 번 돌린 중앙값이고, 단위는 MIPS다. Node 열은 [인터프리터 성능](interpreter-performance.md) 2.4절의 값이다(Node 24.19, 같은 기계, 같은 방법).
