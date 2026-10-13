@@ -120,7 +120,9 @@ jobs:
   # A 32-bit x86 host, in the i386 Debian container re2DJ's release uses.
   # JavaScript actions cannot run inside a 32-bit container, so only the
   # build and test go into it. Its ctest includes the integer host fuzz,
-  # which needs an i386 process (design #22, decision 1).
+  # which needs an i386 process (design #22, decision 1). The container
+  # shares the host's network: on Ubuntu 26.04 one on the default bridge
+  # cannot resolve names (#59).
   linux-x86:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-26.04
@@ -128,7 +130,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Build and test in an i386 container
         run: >-
-          docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src i386/debian:bookworm
+          docker run --rm --network host -v "$GITHUB_WORKSPACE:/src" -w /src i386/debian:bookworm
           setarch i686 bash -c '
           set -euo pipefail;
           apt-get update;
