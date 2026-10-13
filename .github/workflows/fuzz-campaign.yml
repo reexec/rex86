@@ -37,7 +37,7 @@ env:
 jobs:
   # The scale and the seed offset every job uses (decisions 1 and 3).
   plan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       scale: ${{ steps.plan.outputs.scale }}
       offset: ${{ steps.plan.outputs.offset }}
@@ -70,7 +70,7 @@ jobs:
   # gcc-multilib -m32 build, so the job keeps JavaScript actions.
   int-i386:
     needs: plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -122,7 +122,7 @@ jobs:
 
   x87-simd:
     needs: plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
@@ -163,7 +163,7 @@ jobs:
   # their case count.
   robust-release:
     needs: plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
@@ -189,7 +189,7 @@ jobs:
   # CI's sanitizer job.
   robust-asan:
     needs: plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
@@ -217,7 +217,7 @@ jobs:
   # UB there). The corpus carries over between runs through the cache.
   libfuzzer:
     needs: plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
@@ -264,7 +264,7 @@ jobs:
   # the frontend and the IR evaluator against the interpreter.
   irdiff-x64:
     needs: plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
@@ -291,7 +291,7 @@ jobs:
   # compares a build whose every Cpu translates with wasm.
   wasm-translate:
     needs: plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
@@ -335,7 +335,7 @@ jobs:
   # The same invariants on an AArch64 host.
   robust-arm64:
     needs: plan
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
@@ -363,7 +363,7 @@ jobs:
   # parent directory.
   sst:
     needs: plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
