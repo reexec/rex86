@@ -1,5 +1,5 @@
-// The synthetic workloads (design #27, decision 2): six kernels, each a
-// subroutine standing for one shape of game code, and seven drivers that
+// The synthetic workloads (design #27, decision 2): seven kernels, each a
+// subroutine standing for one shape of game code, and eight drivers that
 // call them and end at a gate address. Every workload has a C++ reference
 // model so the harness never credits an engine that is fast and wrong.
 
@@ -50,6 +50,8 @@ inline constexpr std::uint32_t kStringIterations = 4096u;
 // The blocks kernel's distinct blocks: more than Firefox installs as one
 // module each (design #49, decision 5).
 inline constexpr std::uint32_t kBlocksCount = 24576u;
+// The smc kernel's iterations (design #60).
+inline constexpr std::uint32_t kSmcIterations = 4096u;
 
 enum class Kernel : std::uint8_t
 {
@@ -59,9 +61,10 @@ enum class Kernel : std::uint8_t
     kString,
     kX87,
     kBlocks,
+    kSmc,
 };
 
-inline constexpr unsigned kKernelCount = 6;
+inline constexpr unsigned kKernelCount = 7;
 
 struct Workload
 {
@@ -74,13 +77,16 @@ struct Workload
     std::uint32_t expected_edi = 0;
 };
 
-// One code image holding the six kernels and the seven drivers.
+// One code image holding the seven kernels and the eight drivers.
 struct Image
 {
     std::uint32_t base = kCodeBase;
     std::vector<std::uint8_t> code;
     std::vector<Workload> workloads;
     std::uint32_t kernel_entry[kKernelCount] = {};
+    // The page the smc kernel alone fills, its code and its data: guest
+    // writable as well as executable (design #60).
+    std::uint32_t smc_page = 0;
 };
 
 // Assembles the image. False with a message when the assembler fails.

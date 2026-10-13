@@ -274,6 +274,86 @@ std::uint32_t BlocksModel()
     return eax;
 }
 
+// Fills with INT3 up to the next page boundary.
+void PadToPage(Assembler* a)
+{
+    while ((a->Here() & (kGuestPageSize - 1u)) != 0)
+    {
+        a->Byte(0xCC);
+    }
+}
+
+// The smc kernel's code, its stores naming the patched immediate and the
+// variable by address; returns where those two land. An absolute operand is
+// always a disp32, so the layout does not depend on the addresses given.
+void EmitSmcCode(Assembler* a, const std::uint32_t site_address, const std::uint32_t variable_address,
+                 std::uint32_t* site, std::uint32_t* variable)
+{
+    const Label loop = a->NewLabel();
+    const Label skip = a->NewLabel();
+    a->MovImm(Reg::kEax, 0);
+    a->MovImm(Reg::kEcx, kSmcIterations);
+    a->MovImm(Reg::kEdx, 1);
+    a->MovStore(Mem::Abs(site_address), Reg::kEdx);
+    a->Bind(loop);
+    a->Byte(0x81);  // add eax, imm32: the patched immediate follows
+    a->Byte(0xC0);
+    *site = a->Here();
+    a->Dword(1);
+    a->MovRR(Reg::kEbx, Reg::kEax);
+    a->ShiftRI(Shift::kRol, Reg::kEbx, 3);
+    a->AluRR(Alu::kXor, Reg::kEax, Reg::kEbx);
+    a->MovStore(Mem::Abs(variable_address), Reg::kEcx);
+    a->MovRR(Reg::kEdx, Reg::kEcx);
+    a->AluRI(Alu::kAnd, Reg::kEdx, 15);
+    a->Jcc(Cond::kNz, skip, BranchWidth::kShort);
+    a->MovStore(Mem::Abs(site_address), Reg::kEcx);
+    a->Bind(skip);
+    a->Dec(Reg::kEcx);
+    a->Jcc(Cond::kNz, loop, BranchWidth::kShort);
+    a->Ret();
+    *variable = a->Here();
+    a->Dword(0);
+}
+
+// smc: a hot loop on a page of its own that is also its data, as games
+// that keep variables beside their code do (design #60). Every iteration
+// stores the counter into a dword on that page, and every 16th rewrites the
+// immediate of the loop's first ADD; each store invalidates the page's
+// translations and decodes. The entry resets the immediate, so every lap
+// starts alike. EAX := the hash.
+void EmitSmc(Assembler* a, std::uint32_t* page)
+{
+    PadToPage(a);
+    *page = a->Here();
+    // A rehearsal at the same address finds the two addresses.
+    Assembler rehearsal(a->Here());
+    std::uint32_t site = 0;
+    std::uint32_t variable = 0;
+    EmitSmcCode(&rehearsal, 0, 0, &site, &variable);
+    std::uint32_t placed_site = 0;
+    std::uint32_t placed_variable = 0;
+    EmitSmcCode(a, site, variable, &placed_site, &placed_variable);
+    PadToPage(a);
+}
+
+std::uint32_t SmcModel()
+{
+    std::uint32_t eax = 0;
+    std::uint32_t immediate = 1;
+    for (std::uint32_t ecx = kSmcIterations; ecx != 0; --ecx)
+    {
+        eax += immediate;
+        const std::uint32_t ebx = (eax << 3) | (eax >> 29);
+        eax ^= ebx;
+        if ((ecx & 15u) == 0)
+        {
+            immediate = ecx;
+        }
+    }
+    return eax;
+}
+
 void EmitDriver(Assembler* a, const Image& image, Workload* workload)
 {
     const Label entry = a->NewLabel();
@@ -322,6 +402,8 @@ const char* KernelName(const Kernel kernel)
             return "x87";
         case Kernel::kBlocks:
             return "blocks";
+        case Kernel::kSmc:
+            return "smc";
     }
     return "unknown";
 }
@@ -342,6 +424,8 @@ std::uint32_t KernelModel(const Kernel kernel)
             return X87Model();
         case Kernel::kBlocks:
             return BlocksModel();
+        case Kernel::kSmc:
+            return SmcModel();
     }
     return 0;
 }
@@ -350,13 +434,14 @@ bool BuildImage(Image* image, std::string* error)
 {
     Assembler a(image->base);
     using Emitter = void (*)(Assembler*);
-    const Emitter emitters[kKernelCount] = {EmitAlu, EmitMemory, EmitCall,
-                                            EmitString, EmitX87, EmitBlocks};
-    for (unsigned i = 0; i < kKernelCount; ++i)
+    const Emitter emitters[] = {EmitAlu, EmitMemory, EmitCall, EmitString, EmitX87, EmitBlocks};
+    for (unsigned i = 0; i < std::size(emitters); ++i)
     {
         image->kernel_entry[i] = a.Here();
         emitters[i](&a);
     }
+    EmitSmc(&a, &image->smc_page);
+    image->kernel_entry[static_cast<std::size_t>(Kernel::kSmc)] = image->smc_page;
 
     image->workloads.clear();
     // mixed keeps the five kernels it had before blocks (design #49), so
@@ -378,6 +463,10 @@ bool BuildImage(Image* image, std::string* error)
     blocks.name = KernelName(Kernel::kBlocks);
     blocks.kernels = {Kernel::kBlocks};
     image->workloads.push_back(blocks);
+    Workload smc;
+    smc.name = KernelName(Kernel::kSmc);
+    smc.kernels = {Kernel::kSmc};
+    image->workloads.push_back(smc);
 
     for (Workload& workload : image->workloads)
     {
@@ -414,6 +503,8 @@ bool LoadImage(const Image& image, GuestMemory* memory)
     pages.Set(kCodeBase, kCodeSize, kPageReadExecute);
     pages.Set(kDataBase, kDataSize, kPageReadWrite);
     pages.Set(kStackBase, kStackSize, kPageReadWrite);
+    // The smc kernel writes its own page (design #60).
+    pages.Set(image.smc_page, kGuestPageSize, kPageReadWriteExecute);
 
     // The code pages are not writable to the guest, so the image is placed
     // through the host pointer, as a loader would.
