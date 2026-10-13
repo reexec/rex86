@@ -300,6 +300,16 @@ if(REX86_BUILD_TESTS)
         target_link_options(rex86_bench PRIVATE -sNODERAWFS=1)
     endif()
 
+    # The web demo's engine (design #62): a module factory, createRex86Demo,
+    # whose functions the page's Worker calls a frame at a time; the runtime
+    # stays up between calls.
+    if(EMSCRIPTEN)
+        add_executable(rex86_demo src/tools/demo/demo.cpp)
+        target_link_libraries(rex86_demo PRIVATE rex86_bench_lib rex86_host_web rex86_warnings)
+        target_link_options(rex86_demo PRIVATE -sMODULARIZE=1 -sEXPORT_NAME=createRex86Demo
+            -sEXIT_RUNTIME=0 "-sEXPORTED_RUNTIME_METHODS=[cwrap,UTF8ToString,HEAP8]")
+    endif()
+
     add_executable(rex86_irdiff src/tools/irdiff/main.cpp)
     target_link_libraries(rex86_irdiff PRIVATE rex86_irdiff_lib rex86_warnings)
 
@@ -424,6 +434,8 @@ if(REX86_BUILD_TESTS)
         add_test(NAME rex86_bench_smoke COMMAND node $<TARGET_FILE:rex86_bench> --smoke)
         add_test(NAME rex86_robust_smoke COMMAND node $<TARGET_FILE:rex86_robust> --cases 300)
         add_test(NAME rex86_irdiff_smoke COMMAND node $<TARGET_FILE:rex86_irdiff> --cases 20000)
+        add_test(NAME rex86_demo_smoke
+            COMMAND node ${CMAKE_CURRENT_SOURCE_DIR}/tests/host/web/demo_smoke.cjs $<TARGET_FILE:rex86_demo>)
         if(REX86_TRACE_CORPUS)
             add_test(NAME rex86_trace_corpus
                 COMMAND node $<TARGET_FILE:rex86_trace> ${REX86_TRACE_CORPUS})
