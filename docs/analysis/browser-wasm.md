@@ -185,9 +185,9 @@ Emscripten 테스트 도구를 실제 브라우저에서 돌린 결과다. 대�
 
 ### 5.1 Android Chrome, 웹 데모(#62) / Android Chrome, the web demo (#62)
 
-**확인됨**(기기 미상): 사용자가 v0.0.30 Pages 배포의 웹 데모를 Android의 Chrome 154에서 돌려 [#62](https://github.com/reexec/rex86/issues/62#issuecomment-6146902562)에 붙인 보고 줄이다(2026-10-13). user agent는 축소형(`Android 10; K`)이라 모델과 실제 Android 버전을 알 수 없고, 전원 연결 여부도 적히지 않았다. `hardware_concurrency=8`이다.
+**확인됨**(모델 미상): 사용자가 v0.0.30 Pages 배포의 웹 데모를 Android 16의 Chrome 154에서, 전원을 연결하지 않고 돌려 [#62](https://github.com/reexec/rex86/issues/62#issuecomment-6146902562)에 붙인 보고 줄이다(2026-10-13). user agent는 축소형(`Android 10; K`)이라 Android 버전과 전원 상태는 사용자가 따로 알려 주었고, 모델은 아직 모른다. `hardware_concurrency=8`이다.
 
-*Confirmed (device unknown): the report lines the user pasted into #62 after running the v0.0.30 Pages deployment's web demo in Chrome 154 on Android (2026-10-13). The user agent is the reduced form (`Android 10; K`), so the model and real Android version are unknown, and whether it was on power is not stated; `hardware_concurrency=8`.*
+*Confirmed (model unknown): the report lines the user pasted into #62 after running the v0.0.30 Pages deployment's web demo in Chrome 154 on Android 16, on battery (2026-10-13). The user agent is the reduced form (`Android 10; K`), so the user supplied the Android version and power state separately; the model is still unknown; `hardware_concurrency=8`.*
 
 ```text
 [rex86-demo] user_agent="Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36"
@@ -205,6 +205,7 @@ Emscripten 테스트 도구를 실제 브라우저에서 돌린 결과다. 대�
 
 * 7,968프레임(약 80억 단계, 이 속도로 약 4분)을 돌려 바퀴 11,075개가 모두 참조 모델과 맞았다. 모바일 브라우저에서 처음 확인한 정확성 증거다.
 * MIPS는 데모의 최근 1초 값이고, 4절은 `rex86_bench` 측정(20프레임, 프레임 시간의 합)이다. 4,000프레임을 넘긴 뒤라 워밍업은 끝났지만 방법이 달라 0.55배는 **추정** 비교다. 같은 기기의 **Measure** 줄이 있으면 확정할 수 있다.
-* **미확정**: 기기 모델과 전원, 인터프리터 엔진과 측정 모드의 값, iOS Safari. 목표 7의 수치 상한은 iOS Safari 값까지 모인 뒤 정한다.
+* 배터리로 돌렸으므로 기기의 전원 정책에 따라 클록이 제한됐을 수 있다. 전원을 연결한 값과 비교하지 않았다(미확정).
+* **미확정**: 기기 모델, 인터프리터 엔진과 측정 모드의 값, iOS Safari. 목표 7의 수치 상한은 iOS Safari 값까지 모인 뒤 정한다.
 
-*Over 7,968 frames (about 8 billion steps, about four minutes at this speed) all 11,075 laps matched the reference model, the first correctness evidence on a mobile browser. The MIPS figure is the demo's last-second value while section 4 is a `rex86_bench` measurement (20 frames, summed frame times); past 4,000 frames warm-up is over, but the methods differ, so 0.55 is an inferred comparison that the same device's **Measure** lines would confirm. Unresolved: the device model and power, the interpreter engine and measurement mode figures, and iOS Safari; goal 7's numeric caps wait until iOS Safari's figures are in too.*
+*Over 7,968 frames (about 8 billion steps, about four minutes at this speed) all 11,075 laps matched the reference model, the first correctness evidence on a mobile browser. The MIPS figure is the demo's last-second value while section 4 is a `rex86_bench` measurement (20 frames, summed frame times); past 4,000 frames warm-up is over, but the methods differ, so 0.55 is an inferred comparison that the same device's **Measure** lines would confirm. It ran on battery, so the device's power policy may have limited its clocks; no figure on power compares yet (unresolved). Unresolved: the device model, the interpreter engine and measurement mode figures, and iOS Safari; goal 7's numeric caps wait until iOS Safari's figures are in too.*
