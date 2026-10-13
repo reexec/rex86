@@ -128,6 +128,19 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
+      - name: Diagnose name resolution (temporary, #59)
+        continue-on-error: true
+        run: |
+          uname -a; cat /etc/resolv.conf; ls -l /etc/resolv.conf; resolvectl status | head -20 || true
+          docker version --format '{{.Server.Version}}'
+          for image in debian:bookworm i386/debian:bookworm; do
+            for net in bridge host; do
+              echo "== $image $net"
+              docker run --rm --network $net $image sh -c 'cat /etc/resolv.conf; getent ahosts deb.debian.org | head -3 || echo getent-fail; ls -l /etc/nsswitch.conf; grep hosts /etc/nsswitch.conf' 2>&1 | tail -12
+            done
+          done
+          docker run --rm --network host i386/debian:bookworm sh -c 'getent ahostsv4 deb.debian.org || echo v4-fail; getent ahostsv6 deb.debian.org || echo v6-fail'
+          sudo dmesg | tail -20 || true
       - name: Build and test in an i386 container
         run: >-
           docker run --rm --network host -v "$GITHUB_WORKSPACE:/src" -w /src i386/debian:bookworm

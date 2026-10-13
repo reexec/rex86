@@ -35,6 +35,10 @@
 
    고친 뒤에는 그 입력을 단위 테스트로 고정합니다(설계 결정 5).
 
+   케이스 하나가 60초를 넘기면 시간 감시가 `VIOLATION seed=<S>: watchdog: ...`를 적고 실행을 끝냅니다(#59). 코어가 같은 자리에서 나아가지 못하는 결함입니다. 같은 시드를 `--case <S>`로 돌리면 마지막으로 끝난 Run까지의 이벤트가 보입니다. 상한은 `--case-seconds N`(0이면 끔)으로 바꿉니다. 느린 빌드(예: 새니타이저 Debug)에서 거짓 경보가 나면 상한을 늘립니다. 스레드가 없는 wasm32 빌드에는 시간 감시가 없습니다.
+
+   *Past 60 seconds on one case, the watchdog writes `VIOLATION seed=<S>: watchdog: ...` and ends the run (#59): a defect that keeps the core from advancing. `--case <S>` with that seed shows the events up to the last Run that finished. `--case-seconds N` (0 for off) changes the limit; raise it if a slow build (a sanitizer Debug build, say) trips it falsely. The wasm32 build, without threads, has no watchdog.*
+
 4. **libFuzzer**(Clang): 입력의 앞 16바이트가 생성기를, 나머지가 EIP의 코드 바이트를 정하므로 변형이 명령에 직접 닿습니다. 게스트 메모리는 64 KiB 이하로 묶입니다.
 
    ```bash
