@@ -132,11 +132,12 @@ jobs:
         continue-on-error: true
         run: |
           ip=$(getent ahostsv4 deb.debian.org | awk 'NR==1{print $1}'); echo "deb.debian.org=$ip"
-          docker run --rm --network host --add-host deb.debian.org:$ip i386/debian:bookworm bash -c '
-            apt-get update -qq && apt-get install -y -qq strace bind9-dnsutils > /dev/null; echo installed=$?;
-            uname -m; getconf LONG_BIT;
-            dig +short +tries=1 +time=2 @127.0.0.53 debian.org || echo dig-stub-fail;
-            strace -f getent ahostsv4 debian.org 2>&1 | grep -v -E "^(mmap|mprotect|munmap|brk|close|read|fstat|statx|openat|newfstatat)" | tail -50'
+          for opt in '' '--security-opt seccomp=unconfined'; do
+            for image in debian:bookworm i386/debian:bookworm; do
+              echo "== $image opt=[$opt]"
+              docker run --rm $opt $image bash -c "getent ahostsv4 deb.debian.org | head -1 || echo getent-fail; (exec 3<>/dev/tcp/$ip/80 && echo tcp-ok) 2>&1 | tail -1"
+            done
+          done
       - name: Build and test in an i386 container
         run: >-
           docker run --rm --network host -v "$GITHUB_WORKSPACE:/src" -w /src i386/debian:bookworm
