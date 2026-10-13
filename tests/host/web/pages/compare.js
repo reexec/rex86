@@ -3,9 +3,12 @@
 // each version's own directory, alternating which goes first each round so a
 // phone heating up does not land on one version, and shows the median MIPS
 // per engine and workload with B/A, marked only past ±5% when the two
-// sides' runs do not overlap. Results stay on the page; the report box
-// holds [rex86-compare] lines for a person to carry, and
-// window.rex86Compare holds them for drive_pages.mjs.
+// sides' runs do not overlap. With the A/A control (#59, on by default) a
+// third side A2 runs version A again in the same session; a row is marked
+// only when A2/A would not be and B/A moves further from 1 than A2/A, and a
+// row whose A2/A would be marked shows as unsteady. Results stay on the
+// page; the report box holds [rex86-compare] lines for a person to carry,
+// and window.rex86Compare holds them for drive_pages.mjs.
 //
 // The root comes from the newest tag and each version directory from its
 // own, so this file relies only on the contract the design states:
@@ -15,8 +18,8 @@
 // "workload=<name> verified=fail" and "engine_available=false".
 //
 // compare.html?a=0.0.23&b=0.0.24 preselects the versions; engines=, rounds=,
-// frames= (passed to rex86_bench --frames), settle=ms and autostart=1 serve
-// the CI smoke.
+// control=0|1, frames= (passed to rex86_bench --frames), settle=ms and
+// autostart=1 serve the CI smoke.
 
 const kTimeoutMs = 15 * 60 * 1000;
 const kEngines = ['interpreter', 'wasm', 'evaluator'];
@@ -107,6 +110,16 @@ function median(values) {
   return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
+// Two sides' runs: the median ratio, whether no run of one overlaps a run of
+// the other, and the tone past the bounds when they do not.
+function contrast(base, other) {
+  const ratio = base.length && other.length ? median(other) / median(base) : null;
+  const separate = ratio !== null &&
+    (Math.min(...other) > Math.max(...base) || Math.max(...other) < Math.min(...base));
+  const tone = !separate ? '' : ratio >= kBetter ? 'better' : ratio <= kWorse ? 'worse' : '';
+  return { ratio, separate, tone };
+}
+
 function cell(row, text, className) {
   const td = row.insertCell();
   td.textContent = text;
@@ -115,8 +128,9 @@ function cell(row, text, className) {
   }
 }
 
-// One table per engine: workloads as rows, A's and B's medians and B/A.
-function renderTables(a, b, engines, runs) {
+// One table per engine: workloads as rows, A's and B's medians and B/A,
+// and A2/A with the control.
+function renderTables(a, b, engines, control, runs) {
   const container = $('tables');
   container.replaceChildren();
   const summary = [];
@@ -124,11 +138,11 @@ function renderTables(a, b, engines, runs) {
     // Runs are told apart by side, not version: A against itself measures
     // this device's run-to-run variation.
     const of = (side) => runs.filter((run) => run.engine === engine && run.side === side);
-    const [runsA, runsB] = [of('A'), of('B')];
+    const [runsA, runsB, runsA2] = [of('A'), of('B'), of('A2')];
     const heading = document.createElement('h2');
     heading.textContent = engine;
     container.append(heading);
-    const unavailable = [[runsA, a], [runsB, b]].filter(([list]) =>
+    const unavailable = [[runsA, a], [runsB, b], [runsA2, a]].filter(([list]) =>
       list.some((run) => run.outcome === 'unavailable')).map(([, version]) => `v${version}`);
     if (unavailable.length) {
       const note = document.createElement('p');
@@ -136,7 +150,7 @@ function renderTables(a, b, engines, runs) {
       note.textContent = `not available in ${[...new Set(unavailable)].join(' and ')}`;
       container.append(note);
     }
-    const workloads = [...new Set([...runsA, ...runsB].flatMap((run) =>
+    const workloads = [...new Set([...runsA, ...runsB, ...runsA2].flatMap((run) =>
       run.outcome === 'ok' ? Object.keys(run.mips) : []))];
     if (workloads.length === 0) {
       continue;
@@ -145,29 +159,45 @@ function renderTables(a, b, engines, runs) {
     wrap.className = 'table-wrap';
     const table = document.createElement('table');
     table.createTHead().innerHTML =
-      `<tr><th>workload</th><th class="number">A v${a}</th><th class="number">B v${b}</th><th class="number">B/A</th></tr>`;
+      `<tr><th>workload</th><th class="number">A v${a}</th><th class="number">B v${b}</th><th class="number">B/A</th>` +
+      (control ? '<th class="number">A2/A</th>' : '') + '</tr>';
     const body = table.createTBody();
     for (const workload of workloads) {
       const values = (list) => list.filter((run) => run.outcome === 'ok' && workload in run.mips)
         .map((run) => run.mips[workload]);
-      const [valuesA, valuesB] = [values(runsA), values(runsB)];
+      const [valuesA, valuesB, valuesA2] = [values(runsA), values(runsB), values(runsA2)];
       const medianA = valuesA.length ? median(valuesA) : null;
       const medianB = valuesB.length ? median(valuesB) : null;
-      const ratio = medianA && medianB ? medianB / medianA : null;
+      const medianA2 = valuesA2.length ? median(valuesA2) : null;
       // A difference is marked only past the bound and when the two sides'
       // runs do not overlap: the same build against itself already moves
-      // the median by more than 5% on some workloads.
-      const separate = ratio !== null &&
-        (Math.min(...valuesB) > Math.max(...valuesA) || Math.max(...valuesB) < Math.min(...valuesA));
-      const tone = !separate ? '' : ratio >= kBetter ? ' better' : ratio <= kWorse ? ' worse' : '';
+      // the median by more than 5% on some workloads. With the control, A
+      // against itself in this session must not meet that test, and B/A
+      // must move further from 1 than A2/A did.
+      const { ratio, separate, tone } = contrast(valuesA, valuesB);
+      const check = control ? contrast(valuesA, valuesA2) : null;
+      const distance = (r) => Math.abs(Math.log(r));
+      let mark = tone || 'none';
+      if (check && check.tone) {
+        mark = 'unsteady';
+      } else if (check && tone && (check.ratio === null || distance(ratio) <= distance(check.ratio))) {
+        mark = 'none';
+      }
       const row = body.insertRow();
       cell(row, workload);
       cell(row, medianA === null ? '—' : medianA.toFixed(1), 'number');
       cell(row, medianB === null ? '—' : medianB.toFixed(1), 'number');
-      cell(row, ratio === null ? '—' : `${ratio.toFixed(2)}×`, `number${tone}`);
-      row.title = `A: ${valuesA.map((v) => v.toFixed(1)).join(', ') || '—'}\nB: ${valuesB.map((v) => v.toFixed(1)).join(', ') || '—'}`;
-      summary.push({ engine, workload, medianA, medianB, ratio, valuesA, valuesB, separate,
-        runs: Math.min(valuesA.length, valuesB.length) });
+      const shown = mark === 'better' || mark === 'worse' || mark === 'unsteady' ? ` ${mark}` : '';
+      cell(row, ratio === null ? '—' : `${ratio.toFixed(2)}×`, `number${shown}`);
+      if (control) {
+        cell(row, check.ratio === null ? '—' : `${check.ratio.toFixed(2)}×`,
+          `number${check.tone ? ' unsteady' : ''}`);
+      }
+      row.title = `A: ${valuesA.map((v) => v.toFixed(1)).join(', ') || '—'}\nB: ${valuesB.map((v) => v.toFixed(1)).join(', ') || '—'}` +
+        (control ? `\nA2: ${valuesA2.map((v) => v.toFixed(1)).join(', ') || '—'}` : '') +
+        (mark === 'unsteady' ? '\nA against itself moved past ±5% with separate runs: unsteady on this device' : '');
+      summary.push({ engine, workload, medianA, medianB, medianA2, ratio, valuesA, valuesB, valuesA2, separate,
+        control: check, mark, runs: Math.min(valuesA.length, valuesB.length) });
     }
     wrap.append(table);
     container.append(wrap);
@@ -187,7 +217,7 @@ function addRunOutput(run) {
   $('runs').append(details);
 }
 
-async function compare(a, b, engines, rounds, frames, settleMs) {
+async function compare(a, b, engines, rounds, control, frames, settleMs) {
   const status = $('status');
   $('start').disabled = true;
   $('tables').replaceChildren();
@@ -196,8 +226,13 @@ async function compare(a, b, engines, rounds, frames, settleMs) {
   state.done = false;
   const plan = [];
   for (let round = 1; round <= rounds; ++round) {
-    const sides = [{ side: 'A', version: a }, { side: 'B', version: b }];
-    const order = round % 2 ? sides : [...sides].reverse();
+    // Two sides alternate (ABBA); three rotate, so each side takes each
+    // place in turn.
+    const sides = [{ side: 'A', version: a }, { side: 'B', version: b },
+      ...(control ? [{ side: 'A2', version: a }] : [])];
+    const shift = (round - 1) % sides.length;
+    const order = control ? [...sides.slice(shift), ...sides.slice(0, shift)]
+      : round % 2 ? sides : [...sides].reverse();
     for (const engine of engines) {
       for (const side of order) {
         plan.push({ round, engine, ...side });
@@ -215,20 +250,24 @@ async function compare(a, b, engines, rounds, frames, settleMs) {
     const run = { ...step, ...judge(step.version, output), lines: output.lines };
     runs.push(run);
     addRunOutput(run);
-    renderTables(a, b, engines, runs);
+    renderTables(a, b, engines, control, runs);
   }
-  const summary = renderTables(a, b, engines, runs);
+  const summary = renderTables(a, b, engines, control, runs);
   const failedRuns = runs.filter((run) => run.outcome === 'fail');
+  const list = (values) => values.map((v) => v.toFixed(1)).join(',') || 'none';
   const lines = [
     `[rex86-compare] user_agent=${quote(navigator.userAgent)}`,
-    `[rex86-compare] a=${a} b=${b} engines=${engines.join(',')} rounds=${rounds} frames=${frames ?? 'default'}`,
+    `[rex86-compare] a=${a} b=${b} engines=${engines.join(',')} rounds=${rounds} ` +
+      `control=${control ? 'on' : 'off'} frames=${frames ?? 'default'}`,
     ...runs.map((run) => `[rex86-compare] run round=${run.round} side=${run.side} version=${run.version} engine=${run.engine} ` +
       `result=${run.outcome}${run.reason ? ` reason=${quote(run.reason)}` : ''}`),
     ...summary.map((row) => `[rex86-compare] engine=${row.engine} workload=${row.workload} ` +
       `a_mips=${row.medianA?.toFixed(3) ?? 'none'} b_mips=${row.medianB?.toFixed(3) ?? 'none'} ` +
       `ratio=${row.ratio?.toFixed(3) ?? 'none'} runs=${row.runs} separate=${row.separate} ` +
-      `a_runs=${row.valuesA.map((v) => v.toFixed(1)).join(',') || 'none'} ` +
-      `b_runs=${row.valuesB.map((v) => v.toFixed(1)).join(',') || 'none'}`),
+      (row.control ? `a2_mips=${row.medianA2?.toFixed(3) ?? 'none'} ` +
+        `control_ratio=${row.control.ratio?.toFixed(3) ?? 'none'} control_separate=${row.control.separate} ` : '') +
+      `mark=${row.mark} a_runs=${list(row.valuesA)} b_runs=${list(row.valuesB)}` +
+      (row.control ? ` a2_runs=${list(row.valuesA2)}` : '')),
     `[rex86-compare] result=${failedRuns.length === 0 ? 'ok' : 'fail'}`,
   ];
   $('report').value = lines.join('\n');
@@ -274,6 +313,9 @@ async function main() {
   if (rounds >= 1 && rounds <= 7) {
     $('rounds').value = String(rounds);
   }
+  if (params.get('control') === '0' || params.get('control') === '1') {
+    $('control').checked = params.get('control') === '1';
+  }
   const frames = /^[1-9][0-9]*$/.test(params.get('frames') ?? '') ? Number(params.get('frames')) : null;
   const settleMs = /^[0-9]+$/.test(params.get('settle') ?? '') ? Number(params.get('settle')) : 2000;
   const start = () => {
@@ -282,7 +324,7 @@ async function main() {
       $('status').textContent = 'pick at least one engine';
       return;
     }
-    compare($('a').value, $('b').value, chosen, Number($('rounds').value), frames, settleMs)
+    compare($('a').value, $('b').value, chosen, Number($('rounds').value), $('control').checked, frames, settleMs)
       .catch((error) => {
         Object.assign(state, { done: true, ok: false, error: String(error) });
         $('status').textContent = `runner error: ${error}`;
