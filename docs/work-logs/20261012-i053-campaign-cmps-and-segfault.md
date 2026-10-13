@@ -100,3 +100,17 @@
   - 실제 효과(같은 꼴의 사례가 처리기를 거쳐 비교되는 것)는 ASLR에 달려 있어 로컬에서 정할 수 없다. 다음 tag 캠페인의 int-i386 결과로 본다.
 
 *v0.0.26's tag campaign (run 38214393370) lost shard 0 of int-i386 translate and warmup-default to signal 11 on AMD EPYC 7763 runners (last progress at 1.25 and 3.75 million), every other job and shard passing and no CMPS mismatch appearing (no Zen 5 runner this time); `died of signal 11` was printed, but without gdb on the runner no backtrace, while the cores and binary reached the artifacts. With no gdb in WSL (sudo needs a password), a scratch Python script read the ELF cores (`NT_PRSTATUS`, `NT_SIGINFO`, `NT_FILE`, globals through `nm`): case 1,370,060 `BC D1 BC D2 57` (`mov esp, 0x57D2BCD1`, EIP 0x1002E, ESP at heap + 0x2BCD1) and case 3,765,805 `03 A7 95 83 3F 98` (`add esp, [edi+0x983F8395]`, EIP 0x1002F, ESP at heap + 0x2BD82), both with `g_armed = 1`, `g_in_handler = 0` (the handler never ran) and siginfo code 128 (SI_KERNEL). A scratch i386 program (`altstack.c`) confirmed the cause: ESP at the malloc'd alternate stack's bottom + 64 and an INT3 end the process silently with exit code 139, while `SS_AUTODISARM`, re-armed each time, runs the handler all three times (WSL2 kernel 6.18). Fix: `Host`'s alternate stack gets `SS_AUTODISARM` (`1u << 31`, missing from glibc's headers), failing at start if refused, and `Run` calls `sigaltstack` before every test; the SIMD fuzz (EAX-only general-purpose operands) and the x87 fuzz (no signals) stay as they are. Documents: design decision 3 and the alternate-stack note in the kb page `trap-flag-single-step.md`. Verification: the fixed fuzz ran both seeds that died in v0.0.26 (2695000000 with `--translate`, 2630000000) for 5 million cases each with zero mismatches and exit 0, and i386 Debug ctest passed 9/9; the real effect, such cases being compared through the handler, depends on ASLR and shows in the next tag campaign's int-i386.*
+
+## 2026-10-13 (후속: 캠페인 확인 / follow-up: campaigns confirmed)
+
+#59 작업 중에 적는다(#53 후속).
+
+- **v0.0.27 tag 캠페인**([실행 38236531983](https://github.com/reexec/rex86/actions/runs/38236531983)): 12개 작업이 모두 녹색이다.
+  - int-i386 세 작업은 모두 AMD EPYC 7763에서 돌았다. 작업마다 4 × 500만 건이다. 불일치 0, 신호로 죽은 샤드 0이다. 이 설정에서 v0.0.23과 v0.0.26은 24샤드 중 2샤드가 죽었다.
+  - 이 결과로 #53을 닫았다.
+- **v0.0.28 tag 캠페인**([실행 38286389271](https://github.com/reexec/rex86/actions/runs/38286389271)): 모두 녹색이다.
+  - int-i386 warmup-0이 AMD EPYC 9V45(Zen 5)에서 돌았다. 넓힌 CMPS 판정(설계 결정 1)이 처음으로 Zen 5에서 쓰였다.
+  - 샤드 넷(시드 2840000000~3, 각 500만 건)이 모두 불일치 0이다. 벤더 편차는 878, 850, 907, 872건이다.
+  - 같은 캠페인의 translate는 AMD EPYC 9V74, warmup-default는 AMD EPYC 7763에서 돌았다.
+
+*Written during #59 (a #53 follow-up). v0.0.27's tag campaign (run 38236531983) had all 12 jobs green: the three int-i386 jobs ran on AMD EPYC 7763 runners, 4 × 5 million cases each, with zero mismatches and no shard killed by a signal, where v0.0.23 and v0.0.26 had lost 2 of 24 shards in this setup; #53 was closed on this result. v0.0.28's tag campaign (run 38286389271) was green as well, with int-i386 warmup-0 on an AMD EPYC 9V45 (Zen 5), the first run of the widened CMPS judgment (design decision 1) on Zen 5: four shards (seeds 2840000000 to 3, 5 million cases each) with zero mismatches and 878, 850, 907 and 872 vendor deviations; translate ran on an AMD EPYC 9V74 and warmup-default on an AMD EPYC 7763.*

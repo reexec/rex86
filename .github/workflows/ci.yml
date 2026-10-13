@@ -121,26 +121,17 @@ jobs:
   # JavaScript actions cannot run inside a 32-bit container, so only the
   # build and test go into it. Its ctest includes the integer host fuzz,
   # which needs an i386 process (design #22, decision 1). The container
-  # shares the host's network: on Ubuntu 26.04 one on the default bridge
-  # cannot resolve names (#59).
+  # runs without seccomp: on the Ubuntu 26.04 image Docker's default profile
+  # fails an i386 process's socket calls with ENOSYS, so apt reaches nothing
+  # (#59).
   linux-x86:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
-      - name: Diagnose name resolution (temporary, #59)
-        continue-on-error: true
-        run: |
-          ip=$(getent ahostsv4 deb.debian.org | awk 'NR==1{print $1}'); echo "deb.debian.org=$ip"
-          for opt in '' '--security-opt seccomp=unconfined'; do
-            for image in debian:bookworm i386/debian:bookworm; do
-              echo "== $image opt=[$opt]"
-              docker run --rm $opt $image bash -c "getent ahostsv4 deb.debian.org | head -1 || echo getent-fail; (exec 3<>/dev/tcp/$ip/80 && echo tcp-ok) 2>&1 | tail -1"
-            done
-          done
       - name: Build and test in an i386 container
         run: >-
-          docker run --rm --network host -v "$GITHUB_WORKSPACE:/src" -w /src i386/debian:bookworm
+          docker run --rm --security-opt seccomp=unconfined -v "$GITHUB_WORKSPACE:/src" -w /src i386/debian:bookworm
           setarch i686 bash -c '
           set -euo pipefail;
           apt-get update;
