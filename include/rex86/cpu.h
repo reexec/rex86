@@ -93,6 +93,10 @@ struct TranslationStats
     // (design #49).
     std::uint64_t modules_submitted = 0;
     std::uint64_t modules_evicted = 0;
+    // Translations, waiting or installed, dropped because their code changed
+    // (self-modifying code, or a write to a page holding code); each makes
+    // the block wait longer before it is translated again (design #60).
+    std::uint64_t blocks_invalidated = 0;
 };
 
 enum class Engine : std::uint8_t

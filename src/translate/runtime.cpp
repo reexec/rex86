@@ -23,9 +23,9 @@ Translator::~Translator()
     Flush();
 }
 
-void Translator::Forget(Entry* entry, const std::uint32_t head, const bool keep_evictions)
+void Translator::Forget(Entry* entry, const std::uint32_t head, const bool keep_backoff)
 {
-    const std::uint8_t evictions = keep_evictions ? entry->evictions : 0;
+    const std::uint8_t backoff = keep_backoff ? entry->backoff : 0;
     switch (entry->state)
     {
         case State::kTranslated:
@@ -46,7 +46,12 @@ void Translator::Forget(Entry* entry, const std::uint32_t head, const bool keep_
             break;
     }
     *entry = Entry{};
-    entry->evictions = evictions;
+    entry->backoff = backoff;
+}
+
+void Translator::BackOff(Entry* entry)
+{
+    entry->backoff = static_cast<std::uint8_t>(std::min<unsigned>(entry->backoff + 1u, kMaxBackoffShift));
 }
 
 void Translator::Leave(const std::uint32_t ticket)
@@ -70,10 +75,8 @@ void Translator::EvictOldest()
             (found->second.state == State::kTranslated || found->second.state == State::kPending) &&
             found->second.translation.ticket == ticket)
         {
-            const std::uint8_t evictions = found->second.evictions;
-            Forget(&found->second, head);
-            found->second.evictions =
-                static_cast<std::uint8_t>(std::min<unsigned>(evictions + 1u, kMaxEvictionShift));
+            Forget(&found->second, head, true);
+            BackOff(&found->second);
         }
     }
     modules_.erase(ticket);  // should its count have drifted
@@ -88,7 +91,9 @@ void Translator::Refuse(const std::uint32_t ticket, const std::vector<std::uint3
         if (found != entries_.end() && found->second.state == State::kPending &&
             found->second.translation.ticket == ticket)
         {
+            const std::uint8_t backoff = found->second.backoff;
             found->second = Entry{};
+            found->second.backoff = backoff;
             found->second.state = State::kUntranslatable;
             // No page has this generation: the block counts up to the
             // threshold and tries again, as the host may succeed later.
@@ -202,10 +207,12 @@ void Translator::Submit(const GuestMemory& memory)
         Entry& entry = entries_.find(head)->second;
         if (!StillValid(entry.translation.block, memory))
         {
-            // Changed while queued: counted again.
-            const std::uint8_t evictions = entry.evictions;
+            // Changed while queued: counted again, backing off (design #60).
+            const std::uint8_t backoff = entry.backoff;
             entry = Entry{};
-            entry.evictions = evictions;
+            entry.backoff = backoff;
+            BackOff(&entry);
+            ++invalidated_;
             continue;
         }
         heads.push_back(head);
@@ -241,10 +248,14 @@ void Translator::Submit(const GuestMemory& memory)
                 entry.state = State::kPending;
                 break;
             case CompileStatus::kFailed:
+            {
+                const std::uint8_t backoff = entry.backoff;
                 entry = Entry{};
+                entry.backoff = backoff;
                 entry.state = State::kUntranslatable;
                 entry.refused_generation = memory.pages().Generation(head);
                 break;
+            }
         }
     }
     if (status == CompileStatus::kFailed)
@@ -278,7 +289,10 @@ const Translation* Translator::Lookup(const CpuState& state, GuestMemory& memory
             {
                 return &entry.translation;
             }
+            // Its code changed: counted again, backing off (design #60).
             Forget(&entry, state.eip, true);
+            BackOff(&entry);
+            ++invalidated_;
             break;
         case State::kQueued:
         case State::kPending:
@@ -289,15 +303,24 @@ const Translation* Translator::Lookup(const CpuState& state, GuestMemory& memory
             {
                 return nullptr;
             }
-            entry = Entry{};
+            Forget(&entry, state.eip, true);
             break;
         case State::kCounting:
             break;
     }
-    // An evicted block's backoff counts from at least one entry, so that a
-    // threshold of 0 (forced translation) backs off too.
+    // A backoff counts from at least one entry, so that a threshold of 0
+    // (forced translation) backs off too.
     const std::uint32_t needed =
-        entry.evictions == 0 ? threshold_ : std::max(threshold_, 1u) << entry.evictions;
+        entry.backoff == 0 ? threshold_ : std::max(threshold_, 1u) << entry.backoff;
+    // Entries count only while the head's page keeps its code: on a page
+    // written as it runs, a translation would not live to be used (design
+    // #60).
+    const std::uint32_t generation = memory.pages().Generation(state.eip);
+    if (entry.count_generation != generation)
+    {
+        entry.count_generation = generation;
+        entry.count = 0;
+    }
     if (entry.count < needed)
     {
         ++entry.count;

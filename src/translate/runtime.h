@@ -140,6 +140,7 @@ public:
     [[nodiscard]] std::uint64_t translated_count() const { return translated_; }
     [[nodiscard]] std::uint64_t modules_submitted() const { return modules_submitted_; }
     [[nodiscard]] std::uint64_t modules_evicted() const { return modules_evicted_; }
+    [[nodiscard]] std::uint64_t invalidated_count() const { return invalidated_; }
     [[nodiscard]] std::size_t live_modules() const { return modules_.size(); }
     [[nodiscard]] std::size_t queued() const { return queue_.size(); }
 
@@ -160,15 +161,21 @@ private:
         // For kUntranslatable: the head's page generation when refused, so
         // that a change to the code retries.
         std::uint32_t refused_generation = 0;
-        // Times the module budget evicted this block: each doubles the
-        // entries it needs before it is translated again (from at least
-        // one), up to kMaxEvictionShift, so that a working set larger than
-        // the budget does not translate without end (design #49, decision 3).
-        std::uint8_t evictions = 0;
+        // For kCounting: the head's page generation the count belongs to.
+        // The count is of entries during which that page kept its code, so
+        // a write to it starts the count over (design #60).
+        std::uint32_t count_generation = 0;
+        // Times this block's translation was dropped, by the module budget
+        // (design #49, decision 3) or because its code changed (design #60):
+        // each doubles the entries it needs before it is translated again
+        // (from at least one), up to kMaxBackoffShift, so that neither a
+        // working set beyond the budget nor code rewritten while it runs
+        // translates without end.
+        std::uint8_t backoff = 0;
         Translation translation;
     };
 
-    static constexpr std::uint8_t kMaxEvictionShift = 6;
+    static constexpr std::uint8_t kMaxBackoffShift = 6;
 
     // A submitted batch (design #49, decision 3): its blocks' heads in
     // batch order, and how many of them still hold its code.
@@ -180,10 +187,11 @@ private:
 
     static bool StillValid(const ir::Block& block, const GuestMemory& memory);
     // Resets the entry of the block at head, telling the backend, the batch
-    // queue and the module records about what it held. A block whose code
-    // changed keeps its eviction count: the budget's backoff is about the
-    // block's place, not its code.
-    void Forget(Entry* entry, std::uint32_t head, bool keep_evictions = false);
+    // queue and the module records about what it held; keep_backoff keeps
+    // its backoff, which only Flush clears.
+    void Forget(Entry* entry, std::uint32_t head, bool keep_backoff = false);
+    // One more doubling of the entries the block needs, up to the cap.
+    static void BackOff(Entry* entry);
     void Translate(Entry* entry, const CpuState& state, GuestMemory& memory,
                    const Features& features, const interp::GateFilter* gates);
     // Hands the queued blocks still valid to the backend as one batch.
@@ -213,6 +221,8 @@ private:
     std::uint64_t translated_ = 0;
     std::uint64_t modules_submitted_ = 0;
     std::uint64_t modules_evicted_ = 0;
+    // Translations, queued or installed, dropped because their code changed.
+    std::uint64_t invalidated_ = 0;
 };
 
 }  // namespace rex86::translate

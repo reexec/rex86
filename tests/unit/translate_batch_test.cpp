@@ -180,7 +180,12 @@ void StaleQueueTests(rex86::test::Context& context)
     rig.memory.pages().Remove(kPageA, 0x1000, rex86::PageFlag::kTranslated);  // raises the generation
     REX86_CHECK(context, rig.Enter(Rig::Head(kPageB, 1)) != nullptr);
     REX86_CHECK(context, (rig.log.batch_sizes == std::vector<std::uint32_t>{2}));
-    // Page A's block is counted again: the threshold (0) queues it anew.
+    REX86_CHECK_EQ(context, rig.translator->invalidated_count(), std::uint64_t{1});
+    // Page A's block is counted again, backing off (design #60): 1 << 1
+    // entries, then queued.
+    REX86_CHECK(context, rig.Enter(Rig::Head(kPageA, 0)) == nullptr);
+    REX86_CHECK(context, rig.Enter(Rig::Head(kPageA, 0)) == nullptr);
+    REX86_CHECK_EQ(context, rig.translator->queued(), std::size_t{0});
     REX86_CHECK(context, rig.Enter(Rig::Head(kPageA, 0)) == nullptr);
     REX86_CHECK_EQ(context, rig.translator->queued(), std::size_t{1});
 }
@@ -225,7 +230,9 @@ void PendingBatchTests(rex86::test::Context& context)
     REX86_CHECK_EQ(context, rig.log.discarded, std::uint32_t{2});
     REX86_CHECK_EQ(context, rig.translator->live_modules(), std::size_t{1});
     REX86_CHECK(context, rig.Enter(Rig::Head(kPageB, 0)) == nullptr);
-    REX86_CHECK_EQ(context, rig.translator->queued(), std::size_t{2});  // page A's third, page B's first
+    // Page B's first is queued; page A's third, dropped above, backs off
+    // (design #60).
+    REX86_CHECK_EQ(context, rig.translator->queued(), std::size_t{1});
     REX86_CHECK_EQ(context, rig.log.tickets.size(), std::size_t{2});
 
     // A batch flushed before its answer: every handle comes back.
@@ -270,7 +277,10 @@ void BudgetTests(rex86::test::Context& context)
     left.Enter(Rig::Head(kPageA, 0));
     left.Enter(Rig::Head(kPageB, 0));
     left.memory.pages().Remove(kPageA, 0x1000, rex86::PageFlag::kTranslated);
-    left.Enter(Rig::Head(kPageA, 0));  // dropped, then queued and installed again
+    left.Enter(Rig::Head(kPageA, 0));  // dropped: its module goes
+    REX86_CHECK_EQ(context, left.translator->live_modules(), std::size_t{1});
+    left.Enter(Rig::Head(kPageA, 0));
+    left.Enter(Rig::Head(kPageA, 0));  // installed again after its backoff
     REX86_CHECK_EQ(context, left.translator->live_modules(), std::size_t{2});
     REX86_CHECK_EQ(context, left.translator->modules_evicted(), std::uint64_t{0});
 }
@@ -310,6 +320,70 @@ void EvictionBackoffTests(rex86::test::Context& context)
     REX86_CHECK(context, forced.Enter(Rig::Head(kPageA, 0)) != nullptr);  // the third entry
 }
 
+// A translation dropped because its code changed backs off like an evicted
+// one, and entries count only while the head's page keeps its code
+// (design #60).
+void InvalidationBackoffTests(rex86::test::Context& context)
+{
+    translate::TranslatorLimits limits = Limits(1000, 0);
+    limits.threshold = 2;
+    Rig rig(1, limits);
+    const auto enter = [&rig](const std::uint32_t head, const int times) {
+        const translate::Translation* last = nullptr;
+        for (int i = 0; i < times; ++i)
+        {
+            last = rig.Enter(head);
+        }
+        return last;
+    };
+    const auto write_page_a = [&rig] {
+        rig.memory.pages().Add(kPageA, 0x1000, rex86::PageFlag::kTranslated);
+        rig.memory.pages().Remove(kPageA, 0x1000, rex86::PageFlag::kTranslated);
+    };
+    REX86_CHECK(context, enter(Rig::Head(kPageA, 0), 2) == nullptr);
+    REX86_CHECK(context, enter(Rig::Head(kPageA, 0), 1) != nullptr);
+    write_page_a();
+    REX86_CHECK(context, enter(Rig::Head(kPageA, 0), 4) == nullptr);  // dropped, then 2 << 1
+    REX86_CHECK_EQ(context, rig.translator->invalidated_count(), std::uint64_t{1});
+    REX86_CHECK(context, enter(Rig::Head(kPageA, 0), 1) != nullptr);
+    REX86_CHECK(context, (rig.log.dropped == std::vector<std::uint32_t>{100}));
+    write_page_a();
+    REX86_CHECK(context, enter(Rig::Head(kPageA, 0), 8) == nullptr);  // 2 << 2
+    REX86_CHECK(context, enter(Rig::Head(kPageA, 0), 1) != nullptr);
+
+    // A write to the page while the block counts starts the count over.
+    Rig counting(1, limits);
+    counting.Enter(Rig::Head(kPageA, 0));
+    counting.Enter(Rig::Head(kPageA, 0));
+    counting.memory.pages().Add(kPageA, 0x1000, rex86::PageFlag::kTranslated);
+    counting.memory.pages().Remove(kPageA, 0x1000, rex86::PageFlag::kTranslated);
+    REX86_CHECK(context, counting.Enter(Rig::Head(kPageA, 0)) == nullptr);
+    REX86_CHECK(context, counting.Enter(Rig::Head(kPageA, 0)) == nullptr);
+    REX86_CHECK(context, counting.Enter(Rig::Head(kPageA, 0)) != nullptr);
+    REX86_CHECK_EQ(context, counting.translator->invalidated_count(), std::uint64_t{0});
+
+    // The backoff stops doubling at 64 times the threshold.
+    translate::TranslatorLimits one = Limits(1000, 0);
+    one.threshold = 1;
+    Rig capped(1, one);
+    for (int round = 0; round < 8; ++round)
+    {
+        const translate::Translation* translated = nullptr;
+        for (int i = 0; i < 200 && translated == nullptr; ++i)
+        {
+            translated = capped.Enter(Rig::Head(kPageA, 0));
+        }
+        REX86_CHECK(context, translated != nullptr);
+        capped.memory.pages().Remove(kPageA, 0x1000, rex86::PageFlag::kTranslated);
+    }
+    int entries = 0;
+    while (capped.Enter(Rig::Head(kPageA, 0)) == nullptr && entries < 1000)
+    {
+        ++entries;
+    }
+    REX86_CHECK_EQ(context, entries, 64);  // 1 << 6, the dropping entry the first
+}
+
 // Flush empties the queue and the module records.
 void FlushTests(rex86::test::Context& context)
 {
@@ -336,5 +410,6 @@ void RunTranslateBatchTests(rex86::test::Context& context)
     PendingBatchTests(context);
     BudgetTests(context);
     EvictionBackoffTests(context);
+    InvalidationBackoffTests(context);
     FlushTests(context);
 }
