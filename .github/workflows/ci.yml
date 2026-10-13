@@ -227,6 +227,11 @@ jobs:
       - name: Test
         working-directory: tests/host/web
         run: node drive.mjs --bin ../../../build/web-browser-release/bin
+      # The web demo (design #62): a live run on every engine and a
+      # measurement of every workload, in each browser.
+      - name: Web demo
+        working-directory: tests/host/web
+        run: node drive_demo.mjs --bin ../../../build/web-browser-release/bin
       # How many wasm modules each engine holds per process (design #49,
       # decision 5); a record, failing only when the probe cannot run.
       - name: Module limit probe

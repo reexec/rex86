@@ -31,6 +31,7 @@ npx playwright install chromium firefox webkit      # Linux CI: --with-deps
 node drive.mjs --bin ../../../build/web-browser-release/bin
 node drive.mjs --bin ../../../build/web-browser-release/bin --browsers firefox --only unit,irdiff --settle 8000
 node drive.mjs --bin ../../../build/web-browser-release/bin --module-limit
+node drive_demo.mjs --bin ../../../build/web-browser-release/bin  # 웹 데모(5절) / the web demo (section 5)
 ```
 
 * 결과는 `[rex86-browser] browser=<이름> test=<테스트> thread=worker|main result=ok|fail exit= ms= retries= summary="..."` 줄입니다. 벤치마크는 워크로드마다 `bench test= workload= mips=` 줄을 더하고, 끝에 `tests= failed= result=`와 전체 `browsers= result=` 줄이 옵니다. 하나라도 실패하면 종료 코드 1입니다.
@@ -121,7 +122,29 @@ node serve.mjs --site ../../../build/pages-site 8048     # 사람이 열어 볼 
 
 *One build is assembled under its own version and under `0.0.1`, a version it does not report; the first comparison must pass and the second fail for the version check. CI's `browsers` job runs the same checks in Chromium. `--rounds 3 --frames default` runs at the default scale and measures the machine's A/A variation.*
 
-## 5. 실패를 읽는 법 / Reading a failure
+## 5. 웹 데모 / The web demo
+
+README 목표 5의 공개 예제입니다([#62 설계](../design/20261013-i062-web-demo.md)). 코어가 벤치마크의 합성 워크로드를 Worker에서 프레임 단위로 돌리고, 페이지는 그 결과만 그립니다.
+
+*README goal 5's public example (#62 design): the core runs the benchmark's synthetic workloads frame by frame in a Worker, and the page only draws what it reports.*
+
+1. **엽니다.** 버전 목록 위의 **Run the demo**(가장 새 버전), 또는 각 버전의 **Demo**입니다. 로컬 빌드는 3절의 `serve.mjs`(포트 8048)로 `http://localhost:8048/demo.html`입니다.
+2. **고르고 시작합니다.** 워크로드(기본 `mixed`), 엔진(기본 `wasm`, `interpreter`, 검증용 `evaluator`), 프레임당 단계 수(기본 100만, 벤치마크와 같음)를 고르고 **Start**를 누릅니다. 돌리는 중에 바꾸면 그 설정으로 다시 시작합니다.
+3. **읽습니다.**
+   * MIPS(최근 1초와 시작 이후), 프레임 시간, retire한 단계, **검증된 바퀴**입니다. 바퀴마다 결과를 C++ 참조 모델과 맞춰 보고, 틀리면 바로 멈추고 이유를 보입니다.
+   * 번역이 돌린 단계의 비율, 번역된 블록, 설치된 wasm 모듈, 축출, 코드 변경으로 버려진 번역(#60), 엔진 메모리, 생성된 wasm, wasm 힙, 코어 모듈 크기(목표 7의 계측)입니다.
+   * 기판 넷 기준 실시간 비율(IPC 1.0 가정)과 기판 한 프레임 분량을 이 속도로 돌리는 시간입니다.
+   * 시작 직후의 프레임은 번역과 모듈 설치가 섞여 느립니다. 그래프가 평평해진 뒤의 값을 읽습니다.
+4. **측정합니다.** **Measure**는 위에서 고른 엔진으로 모든 워크로드를 정한 프레임 수(기본 20)만큼 돌립니다. MIPS, 프레임 p50과 p99, 첫 프레임, 검증을 표로 보입니다. `rex86_bench`와 같은 기계, 같은 프레임이라 값이 맞먹습니다.
+5. **보고합니다.** **Copy report**의 `[rex86-demo]` 줄을 기기(모델, OS, 브라우저 버전, 전원 연결 여부)와 함께 [#62](https://github.com/reexec/rex86/issues/62)에 붙입니다. 실기기 값은 [기록](../analysis/browser-wasm.md) 5절에 더하고, 목표 7의 수치 상한을 정하는 근거로 씁니다.
+
+*1 Open **Run the demo** above the version list (the newest version) or a version's **Demo**; a local build is `http://localhost:8048/demo.html` through section 3's `serve.mjs` (port 8048). 2 Pick a workload (default `mixed`), an engine (default `wasm`, `interpreter`, or `evaluator` for verification) and the steps per frame (default a million, as the benchmark) and press **Start**; changing them while running restarts with the new setting. 3 Read MIPS (the last second and since start), frame time, retired steps and **verified laps** (each lap is checked against the C++ reference model, and a wrong one stops the run with the reason); the share of steps run translated, blocks translated, wasm modules installed, evictions, translations dropped because code changed (#60), engine memory, generated wasm, the wasm heap and the core module's size (goal 7's instrumentation); and the real-time ratio against the four boards (IPC 1.0 assumed) with the time one board frame takes at this speed. The first frames mix translation and module installation and run slow; read the figures once the graph levels. 4 **Measure** runs every workload with the engine chosen above for the frames chosen (default 20), showing MIPS, frame p50 and p99, the first frame and verification; the machine and frames are `rex86_bench`'s, so the figures match. 5 Paste the `[rex86-demo]` lines from **Copy report** with the device (model, OS, browser version, on power or not) into #62; real-device figures go to section 5 of the record and ground goal 7's numeric caps.*
+
+* **Firefox의 프레임 시간**: Worker의 `performance.now()`가 1 ms 단위로 거칠어(교차 출처 격리가 없을 때) 짧은 프레임의 p50과 p99가 정수로 보입니다. 프레임당 단계 수를 늘리면 덜합니다.
+
+*Firefox's frame times: `performance.now()` in a Worker is coarsened to 1 ms without cross-origin isolation, so short frames' p50 and p99 show as whole numbers; more steps per frame make it matter less.*
+
+## 6. 실패를 읽는 법 / Reading a failure
 
 * `abort: ... out of memory`이고 `retries=2`: 메모리 회수가 따라오지 못했습니다. `?settle=10000`으로 테스트 사이 대기를 늘려 다시 돌립니다. 그래도 실패하면 기록 3절의 모듈 수 한도를 봅니다.
 * irdiff의 `first mismatch: ... the host refused the module`: 생성 모듈 설치가 거절됐습니다(번역 결과가 틀린 것은 아닙니다). 바로 위의 `rex86: a generated module failed to install:` 줄이 이유를 말합니다. 코어 자체는 거절된 블록을 인터프리터로 돌리지만, irdiff는 설치를 요구하므로 불일치로 셉니다.
