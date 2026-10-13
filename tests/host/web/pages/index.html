@@ -38,6 +38,8 @@
   p { margin: 0 0 12px; }
   .muted { color: var(--muted); font-size: 13px; }
   a { color: var(--link); }
+  .compare.demo { background: var(--link); color: var(--bg); border-color: var(--link); margin-right: 8px; }
+  .compare.demo[hidden] { display: none; }
   .compare {
     display: inline-block;
     margin: 4px 0 16px;
@@ -59,6 +61,7 @@
 <body>
 <h1>rex86 browser tests</h1>
 <p class="muted">IA-32 CPU core in WebAssembly. Each version runs its own build of the test tools on synthetic code in this browser.</p>
+<a class="compare demo" id="demo" href="#" hidden>Run the demo</a>
 <a class="compare" id="compare" href="compare.html">Compare two versions</a>
 <p id="status" class="muted">loading versions</p>
 <ul id="versions"></ul>
@@ -87,7 +90,7 @@
     }
     const versions = await response.json();
     const list = document.getElementById('versions');
-    for (const { version, commit, date } of versions) {
+    for (const { version, commit, date, demo } of versions) {
       const item = document.createElement('li');
       const head = document.createElement('div');
       const name = document.createElement('span');
@@ -99,12 +102,22 @@
       head.append(name, meta);
       const links = document.createElement('div');
       links.className = 'links';
+      if (demo) {
+        links.append(link('Demo', `v${version}/demo.html`));
+      }
       links.append(
         link('Benchmark', `v${version}/index.html?only=bench-interpreter,bench-wasm`),
         link('Full suite', `v${version}/index.html`),
         link('Release notes', `${repo}/blob/v${version}/docs/release-notes/v${version}.md`));
       item.append(head, links);
       list.append(item);
+    }
+    // The web demo (#62) of the newest version that has one.
+    const newest = versions.find((entry) => entry.demo);
+    if (newest) {
+      const demoLink = document.getElementById('demo');
+      demoLink.href = `v${newest.version}/demo.html`;
+      demoLink.hidden = false;
     }
     const compare = document.getElementById('compare');
     if (versions.length >= 2) {

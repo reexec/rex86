@@ -1,9 +1,10 @@
 // The Pages site's Playwright check (design #52, decision 5): serves a site
 // assembled by scripts/pages_site.mjs and, in each browser, checks that the
 // version list shows every version, that a version page's benchmark smoke
-// runs from its directory, and that a comparison of two versions ends with
-// the expected result. Prints [rex86-pages] lines; exits 1 when a check
-// does not hold.
+// runs from its directory, that its web demo (#62), when it has one, runs
+// there and is linked from the root, and that a comparison of two versions
+// ends with the expected result. Prints [rex86-pages] lines; exits 1 when a
+// check does not hold.
 //
 //   node drive_pages.mjs --site <dir> --compare A,B [--expect ok|fail]
 //                        [--browsers chromium,firefox] [--rounds N] [--frames N|default]
@@ -55,7 +56,7 @@ async function waitFor(page, global) {
   return page.evaluate((name) => window[name], global);
 }
 
-async function checkBrowser(name, origin, versions, { compare, expect, rounds, frames, control }) {
+async function checkBrowser(name, origin, versions, { site: siteDir, compare, expect, rounds, frames, control }) {
   const browser = await engines[name].launch();
   const prefix = `[rex86-pages] browser=${name}`;
   const failures = [];
@@ -82,6 +83,25 @@ async function checkBrowser(name, origin, versions, { compare, expect, rounds, f
       `summary="${smoke?.summary ?? suite.error ?? ''}"`);
     if (!smokeOk) {
       failures.push('version-page');
+    }
+
+    // The web demo (#62), when the version has one: it runs from its
+    // directory, and the root links it.
+    if (fs.existsSync(path.join(siteDir, `v${b}`, 'demo.html'))) {
+      await page.goto(`${origin}/`);
+      await waitFor(page, 'rex86Versions');
+      const linked = await page.evaluate(() => {
+        const demo = document.getElementById('demo');
+        return demo !== null && !demo.hidden ? demo.getAttribute('href') : null;
+      });
+      await page.goto(`${origin}/v${b}/demo.html?workload=alu&engine=wasm&budget=100000&frames=3&autostart=1`);
+      const demo = await waitFor(page, 'rex86Demo');
+      const demoOk = demo.ok === true && !demo.error && demo.frames === 3 && linked !== null;
+      console.log(`${prefix} check=demo version=${b} linked=${linked} frames=${demo.frames} ` +
+        `result=${demoOk ? 'ok' : 'fail'}${demo.error ? ` error="${demo.error}"` : ''}`);
+      if (!demoOk) {
+        failures.push('demo');
+      }
     }
 
     await page.goto(`${origin}/compare.html?a=${a}&b=${b}&rounds=${rounds}` +

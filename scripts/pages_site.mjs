@@ -16,9 +16,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-// module_limit.{html,js}: the module limit probe (design #49), for real devices.
+// module_limit.{html,js}: the module limit probe (design #49), for real devices;
+// demo.{html,js} and demo_worker.js: the web demo (design #62).
 const kRunnerFiles = ['index.html', 'suite.js', 'worker.js', 'main.html', 'report.mjs', 'module_limit.html',
-  'module_limit.js'];
+  'module_limit.js', 'demo.html', 'demo.js', 'demo_worker.js'];
 const kRequiredRunnerFiles = ['index.html', 'suite.js', 'worker.js'];
 const kRootFiles = ['index.html', 'compare.html', 'compare.js'];
 const kBinExtensions = new Set(['.js', '.wasm', '.data', '.json']);
@@ -112,7 +113,12 @@ const listFile = path.join(options.site, 'versions.json');
 let versions = fs.existsSync(listFile) ? JSON.parse(fs.readFileSync(listFile, 'utf8')) : [];
 versions = versions.filter((entry) => entry.version !== options.version &&
   fs.existsSync(path.join(options.site, `v${entry.version}`)));
-versions.push({ version: options.version, commit: options.commit, date: options.date });
+// demo marks a version directory holding the web demo (#62), which the root
+// links; earlier versions have none.
+versions.push({
+  version: options.version, commit: options.commit, date: options.date,
+  demo: fs.existsSync(path.join(versionDir, 'demo.html')),
+});
 versions.sort((a, b) => compareVersions(b.version, a.version));
 
 let rootUpdated = false;
