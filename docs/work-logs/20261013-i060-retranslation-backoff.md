@@ -58,8 +58,8 @@
 
 ### 다음 / Next
 
-1. CI(번역 강제 wasm, Clang, 새니타이저)를 확인한다.
+1. (끝남) CI: 번역 강제 wasm, Clang, 새니타이저를 포함한 모든 작업이 녹색이다([실행 38333791376](https://github.com/reexec/rex86/actions/runs/38333791376)).
 2. 머지는 사용자 요청을 기다린다. #59와 함께 머지된다.
 3. 기본 묶음 크기의 재검토는 소비자 게스트 측정 뒤로 남긴다. 인터프리터의 페이지 단위 무효화는 후속 후보다.
 
-*1 Check CI (forced wasm translation, Clang, sanitizers). 2 The merge waits for the user's request, together with #59. 3 Reconsidering the default batch size waits for consumer guest measurements; the interpreter's per-page invalidation is a follow-up candidate.*
+*1 (done) CI: every job green, forced wasm translation, Clang and sanitizers included (run 38333791376). 2 The merge waits for the user's request, together with #59. 3 Reconsidering the default batch size waits for consumer guest measurements; the interpreter's per-page invalidation is a follow-up candidate.*

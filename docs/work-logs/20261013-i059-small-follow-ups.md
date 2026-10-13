@@ -59,7 +59,7 @@
 
 ### 다음 / Next
 
-1. 머지는 사용자 요청을 기다린다.
-2. 다음 작업은 사용자가 고른 #49 후속이다(자기 수정 코드의 재번역 억제, 모듈 수와 처리량).
+1. (끝남) CI: 모든 작업이 Ubuntu 26.04에서 녹색이다([실행 38329912537](https://github.com/reexec/rex86/actions/runs/38329912537)). 최종 코드로 브랜치에서 돌린 캠페인 smoke도 녹색이다([실행 38329939309](https://github.com/reexec/rex86/actions/runs/38329939309)).
+2. 머지는 사용자 요청을 기다린다. #60이 같은 브랜치에 쌓였다.
 
-*1 The merge waits for the user's request. 2 Next is the #49 follow-up the user chose (damping re-translation of self-modifying code, module count against throughput).*
+*1 (done) CI: every job green on Ubuntu 26.04 (run 38329912537), and the campaign smoke run on the branch with the final code green too (run 38329939309). 2 The merge waits for the user's request; #60 is stacked on the same branch.*
