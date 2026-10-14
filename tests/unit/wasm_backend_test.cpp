@@ -307,6 +307,72 @@ void WasmBatchTests(rex86::test::Context& context)
     REX86_CHECK(context, deferred.cpu.translation_stats().block_runs > 0);
 }
 
+// Generated memory checks (design #65, decision 3): inline where they can
+// vouch for an access, the helper otherwise. Either way a translated run
+// faults, exits or completes exactly where the interpreter does.
+void WasmCheckTests(rex86::test::Context& context)
+{
+    struct Case
+    {
+        const char* name;
+        std::uint32_t address;
+        bool write;
+        void (*setup)(Rig*);
+    };
+    const Case cases[] = {
+        {"read", 0x8000, false, [](Rig*) {}},
+        {"write", 0x8000, true, [](Rig*) {}},
+        {"read-only page", 0x8000, true,
+         [](Rig* rig) { rig->memory.pages().Set(0x8000, 0x1000, rex86::kPageReadExecute); }},
+        {"unmapped next page", 0x8FFE, true,
+         [](Rig* rig) { rig->memory.pages().Set(0x9000, 0x1000, rex86::PageFlag::kNone); }},
+        {"unmapped read", 0x9000, false,
+         [](Rig* rig) { rig->memory.pages().Set(0x9000, 0x1000, rex86::PageFlag::kNone); }},
+        {"past the end", 0xFFFE, false, [](Rig*) {}},
+        {"code page", kCode + 0x100, true, [](Rig*) {}},
+        {"non-flat DS", 0x8000, true,
+         [](Rig* rig) {
+             rex86::SegmentRegister& ds = rig->cpu.state().Seg(rex86::Segment::kDs);
+             ds.base = 0x100;
+             ds.limit = 0xFFFF;
+         }},
+        {"read-only DS", 0x8000, true,
+         [](Rig* rig) { rig->cpu.state().Seg(rex86::Segment::kDs).writable = false; }},
+    };
+    for (const Case& test : cases)
+    {
+        // mov eax, 0x11223344; then mov [address], eax or mov eax, [address];
+        // then inc ecx and hlt, so the block goes on past the access.
+        const std::uint8_t a0 = static_cast<std::uint8_t>(test.address);
+        const std::uint8_t a1 = static_cast<std::uint8_t>(test.address >> 8);
+        const std::vector<std::uint8_t> code = {0xB8, 0x44, 0x33, 0x22, 0x11,
+                                                static_cast<std::uint8_t>(test.write ? 0x89 : 0x8B),
+                                                0x05, a0, a1, 0x00, 0x00, 0x41, 0xF4};
+        Rig interpreted(std::initializer_list<std::uint8_t>{});
+        Rig translated(std::initializer_list<std::uint8_t>{});
+        Load(&interpreted, code);
+        Load(&translated, code);
+        test.setup(&interpreted);
+        test.setup(&translated);
+        rex86::host::web::WebWasmModuleServices services;
+        rex86::TranslationOptions options;
+        options.mode = rex86::TranslationMode::kWasm;
+        options.threshold = 0;
+        options.wasm = &services;
+        options.blocks_per_module = 1;
+        REX86_CHECK(context, translated.cpu.SetTranslation(options));
+        const rex86::Event a = interpreted.cpu.Run(100);
+        const rex86::Event b = translated.cpu.Run(100);
+        const bool same = a.reason == b.reason && a.steps == b.steps && a.fault_kind == b.fault_kind &&
+                          a.fault_address == b.fault_address && SameMachine(interpreted, translated);
+        if (!same)
+        {
+            context.Fail(std::string("inline check: ") + test.name, __FILE__, __LINE__);
+        }
+        REX86_CHECK(context, translated.cpu.translation_stats().block_runs > 0);
+    }
+}
+
 #endif
 
 }  // namespace
@@ -317,5 +383,6 @@ void RunWasmBackendTests(rex86::test::Context& context)
 #if defined(REX86_HOST_WEB)
     WasmRunTests(context);
     WasmBatchTests(context);
+    WasmCheckTests(context);
 #endif
 }

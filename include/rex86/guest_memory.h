@@ -70,6 +70,13 @@ public:
         return static_cast<std::uint32_t>(flags_.size());
     }
 
+    // The flags of every page, one byte each, page_count() of them: for an
+    // engine that checks pages inline (the wasm backend, #65).
+    [[nodiscard]] const PageFlag* data() const
+    {
+        return flags_.data();
+    }
+
     // The flags of the page holding address, or kNone past the end.
     [[nodiscard]] PageFlag Get(std::uint32_t address) const;
 

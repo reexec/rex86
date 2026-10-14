@@ -12,6 +12,7 @@
 
 #include "rex86/environment.h"
 #include "translate/runtime.h"
+#include "translate/wasm/codegen.h"
 #include "translate/wasm/module_writer.h"
 
 namespace rex86::translate::wasm
@@ -43,6 +44,9 @@ private:
     std::uint32_t batch_;
     // Module bytes a pending installation may still read.
     std::unordered_map<std::uint32_t, Bytes> pending_bytes_;
+    // What inline checks read (design #65), at an address every module this
+    // backend compiles embeds; Run refreshes it for the memory it runs on.
+    CheckContext check_context_;
 };
 
 }  // namespace rex86::translate::wasm

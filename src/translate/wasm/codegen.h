@@ -16,14 +16,26 @@
 namespace rex86::translate::wasm
 {
 
+// What inline checks read (design #65, decision 3), at an address the
+// generated code embeds: the guest memory's page flags (a PageFlag*) and its
+// size, which the backend refreshes before each run.
+struct CheckContext
+{
+    std::uint32_t flags = 0;
+    std::uint32_t size = 0;
+};
+
 // The function body of one block. check_helper is the table index of the
 // function judging Check operations, of type (state, memory, segment, offset,
-// bytes | write << 8) -> 1 when the access would succeed.
-ModuleSpec::Function CompileBlock(const ir::Block& block, std::uint32_t check_helper);
+// bytes | write << 8) -> 1 when the access would succeed. check_context, when
+// not 0, is the wasm address of a CheckContext: a Check then calls the
+// helper only when an inline test cannot vouch for the access.
+ModuleSpec::Function CompileBlock(const ir::Block& block, std::uint32_t check_helper,
+                                  std::uint32_t check_context = 0);
 
 // A module exporting one function per block, as b0, b1, ...
 Bytes CompileModule(const ir::Block* const* blocks, std::uint32_t count,
-                    std::uint32_t check_helper);
+                    std::uint32_t check_helper, std::uint32_t check_context = 0);
 
 inline std::uint32_t EncodeExit(const ir::ExitKind kind, const std::uint32_t steps)
 {
