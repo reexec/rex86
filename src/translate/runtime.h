@@ -6,6 +6,7 @@
 #ifndef REX86_TRANSLATE_RUNTIME_H_
 #define REX86_TRANSLATE_RUNTIME_H_
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -124,8 +125,23 @@ public:
     // The runnable translation of the block at CS:EIP, or null. Counts an
     // entry, and translates the block once the count reaches the threshold.
     // The caller has checked ir::ModesSupported.
+    // The common case, a translated block entered again with no batch due,
+    // is inline through the cache (design #65); the rest is LookupSlow.
     const Translation* Lookup(const CpuState& state, GuestMemory& memory, const Features& features,
-                              const interp::GateFilter* gates);
+                              const interp::GateFilter* gates)
+    {
+        ++lookups_;
+        if (queue_.empty() || lookups_ - queue_since_ < batch_wait_)
+        {
+            const CacheSlot& slot = cache_[CacheIndex(state.eip)];
+            if (slot.entry != nullptr && slot.eip == state.eip && slot.entry->state == State::kTranslated &&
+                StillValid(slot.entry->translation.block, memory))
+            {
+                return &slot.entry->translation;
+            }
+        }
+        return LookupSlow(state, memory, features, gates);
+    }
 
     ir::ExitResult Run(const Translation& translation, CpuState& state, GuestMemory& memory)
     {
@@ -177,6 +193,21 @@ private:
 
     static constexpr std::uint8_t kMaxBackoffShift = 6;
 
+    // A direct-mapped cache in front of entries_ (design #65): the
+    // dispatch's common case, a translated block entered again, skips the
+    // hash. An entry's address is stable until Flush, which clears this.
+    struct CacheSlot
+    {
+        std::uint32_t eip = 0;
+        Entry* entry = nullptr;
+    };
+    static constexpr std::uint32_t kCacheBits = 10;
+
+    static std::uint32_t CacheIndex(const std::uint32_t eip)
+    {
+        return (eip * 0x9E3779B1u) >> (32u - kCacheBits);
+    }
+
     // A submitted batch (design #49, decision 3): its blocks' heads in
     // batch order, and how many of them still hold its code.
     struct Module
@@ -185,7 +216,23 @@ private:
         std::uint32_t live = 0;
     };
 
-    static bool StillValid(const ir::Block& block, const GuestMemory& memory);
+    // A store into translated code, InvalidateCode or the host's own page
+    // changes clear kTranslated, which raises the generation (design #34,
+    // decision 2).
+    static bool StillValid(const ir::Block& block, const GuestMemory& memory)
+    {
+        for (std::uint32_t i = 0; i < block.page_count; ++i)
+        {
+            if (memory.pages().Generation(block.pages[i]) != block.generations[i])
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+    // Lookup past the cache: a batch due, a miss, counting and translating.
+    const Translation* LookupSlow(const CpuState& state, GuestMemory& memory, const Features& features,
+                                  const interp::GateFilter* gates);
     // Resets the entry of the block at head, telling the backend, the batch
     // queue and the module records about what it held; keep_backoff keeps
     // its backoff, which only Flush clears.
@@ -208,6 +255,7 @@ private:
     std::uint32_t batch_wait_;
     std::uint32_t max_modules_;
     std::unordered_map<std::uint32_t, Entry> entries_;
+    std::array<CacheSlot, std::size_t{1} << kCacheBits> cache_{};
     // Heads of kQueued blocks, oldest first, and the lookup count when the
     // oldest joined.
     std::vector<std::uint32_t> queue_;
