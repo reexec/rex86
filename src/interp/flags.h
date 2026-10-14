@@ -19,6 +19,18 @@ namespace rex86::interp
 // decision 3). Alignment checking (#AC) is not modeled.
 inline constexpr std::uint32_t kEflagsPopWritable = 0x00247FD5u;
 
+// IOPL, bits 12 and 13.
+inline constexpr std::uint32_t kEflagsIopl = 0x00003000u;
+
+// What POPF and IRET may change at this core's privilege. Under
+// Features::user_mode (CPL 3, IOPL 0) IF and IOPL are left alone without a
+// fault, as the SDM gives for CPL > IOPL and CPL > 0 (design #69).
+constexpr std::uint32_t PopWritableFlags(const bool user_mode)
+{
+    return user_mode ? (kEflagsPopWritable & ~(kEflagsInterrupt | kEflagsIopl))
+                     : kEflagsPopWritable;
+}
+
 constexpr std::uint32_t WidthMask(const unsigned width_bits)
 {
     return width_bits >= 32 ? 0xFFFFFFFFu : ((1u << width_bits) - 1u);

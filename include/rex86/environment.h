@@ -133,6 +133,13 @@ struct Features
     // D/B = 0 code and stack segments (16-bit default width), which rePIU's
     // DOS/4GW paths use.
     bool segments_16bit = false;
+    // A protected-mode process at CPL 3 with IOPL 0 and DPL 0 IDT gates,
+    // as the SDM defines it (design #69): CLI, STI, HLT, IN, OUT, INS and
+    // OUTS raise kPrivilegedInstruction and INT imm8 raises #GP (error code
+    // vector*8+2), all before retiring; POPF and IRET leave IF and IOPL
+    // alone. INT3, INTO and INT1 are unchanged. rePIU's emulated model uses
+    // it so the guest faults where it would in a Win32 process.
+    bool user_mode = false;
 };
 
 class Environment
