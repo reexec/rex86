@@ -34,38 +34,75 @@ std::uint32_t SegmentBaseOffset(const std::uint8_t segment)
     return SegmentOffset(segment) + static_cast<std::uint32_t>(offsetof(SegmentRegister, base));
 }
 
-// The check context's fields (CheckContext in codegen.h).
+// The run context's fields (RunContext in codegen.h).
 constexpr std::uint32_t kContextFlags = 0;
 constexpr std::uint32_t kContextSize = 4;
-static_assert(offsetof(CheckContext, flags) == kContextFlags && offsetof(CheckContext, size) == kContextSize,
-              "generated code reads the check context by these offsets");
+constexpr std::uint32_t kContextMaxSteps = 8;
+constexpr std::uint32_t kContextAttention = 12;
+constexpr std::uint32_t kContextLoops = 16;
+static_assert(offsetof(RunContext, flags) == kContextFlags && offsetof(RunContext, size) == kContextSize &&
+                  offsetof(RunContext, max_steps) == kContextMaxSteps &&
+                  offsetof(RunContext, attention) == kContextAttention &&
+                  offsetof(RunContext, loops) == kContextLoops,
+              "generated code reads the run context by these offsets");
 
 class Generator
 {
 public:
     Generator(const ir::Block& block, const std::uint32_t check_helper, const std::uint32_t check_context)
         : block_(block), check_helper_(check_helper), check_context_(check_context),
-          current_eip_(block.start_eip)
+          loops_(check_context != 0 && LoopsToStart(block)), current_eip_(block.start_eip)
     {
     }
 
     ModuleSpec::Function Run()
     {
+        // A block that exits to its own start runs its passes in a wasm loop
+        // (design #67).
+        if (loops_)
+        {
+            code_.Loop();
+        }
         for (std::size_t i = 0; i < block_.insts.size(); ++i)
         {
             Emit(static_cast<ir::Value>(i), block_.insts[i]);
         }
+        if (loops_)
+        {
+            code_.Op(op::kEnd);
+        }
         // The evaluator's fallback for a block without a final exit.
         ExitConst(ir::ExitKind::kInterpret, current_eip_, current_index_);
         ModuleSpec::Function function;
-        // The values, then the inline check's three temporaries.
+        // The values, then the temporaries.
         function.locals = static_cast<std::uint32_t>(block_.insts.size()) + kTemporaries;
         function.code = code_.bytes();
         return function;
     }
 
 private:
-    static constexpr std::uint32_t kTemporaries = 3;
+    // The inline check's three (design #65), then the steps of the passes
+    // already run in place (design #67).
+    static constexpr std::uint32_t kTemporaries = 4;
+
+    // An exit to the block's own start, which a loop can take in place.
+    static bool IsLoopBack(const ir::Block& block, const ir::Inst& inst)
+    {
+        return (inst.op == ir::Op::kExitIf || (inst.op == ir::Op::kExit && !inst.dynamic)) &&
+               inst.kind == ir::ExitKind::kContinue && inst.imm == block.start_eip;
+    }
+
+    static bool LoopsToStart(const ir::Block& block)
+    {
+        for (const ir::Inst& inst : block.insts)
+        {
+            if (IsLoopBack(block, inst))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
 
     static std::uint32_t Local(const ir::Value value) { return kFirstValueLocal + value; }
 
@@ -185,7 +222,67 @@ private:
     void ExitConst(const ir::ExitKind kind, const std::uint32_t eip, const std::uint32_t steps)
     {
         StoreEip(eip);
-        code_.I32Const(EncodeExit(kind, steps));
+        ExitCode(kind, steps);
+        code_.Op(op::kReturn);
+    }
+
+    // Pushes the exit code for an exit after steps of this pass: in a loop,
+    // the passes already run in place count too.
+    void ExitCode(const ir::ExitKind kind, const std::uint32_t steps)
+    {
+        if (!loops_)
+        {
+            code_.I32Const(EncodeExit(kind, steps));
+            return;
+        }
+        code_.LocalGet(Temporary(3));
+        code_.I32Const(steps);
+        code_.Op(op::kI32Add);
+        code_.I32Const(1);
+        code_.Op(op::kI32Shl);
+        if (kind == ir::ExitKind::kInterpret)
+        {
+            code_.I32Const(1);
+            code_.Op(op::kI32Or);
+        }
+    }
+
+    // An exit to the block's own start inside the loop (design #67): count
+    // the pass, then run the next one in place when another whole pass fits
+    // the steps allowed and attention is clear, as the dispatch would;
+    // otherwise exit to the start with every pass counted. depth is how many
+    // structured blocks lie between here and the loop.
+    void LoopBack(const std::uint32_t steps, const std::uint32_t depth)
+    {
+        const std::uint32_t done = Temporary(3);
+        code_.LocalGet(done);
+        code_.I32Const(steps);
+        code_.Op(op::kI32Add);
+        code_.LocalSet(done);
+        code_.LocalGet(done);
+        code_.I32Const(block_.instruction_count);
+        code_.Op(op::kI32Add);
+        code_.I32Const(check_context_);
+        code_.Memory(op::kI32Load, kContextMaxSteps);
+        code_.Op(op::kI32LeU);
+        code_.I32Const(check_context_);
+        code_.Memory(op::kI32Load, kContextAttention);
+        code_.Memory(op::kI32Load8U, 0);
+        code_.Op(op::kI32Eqz);
+        code_.Op(op::kI32And);
+        code_.If();
+        code_.I32Const(check_context_);
+        code_.I32Const(check_context_);
+        code_.Memory(op::kI32Load, kContextLoops);
+        code_.I32Const(1);
+        code_.Op(op::kI32Add);
+        code_.Memory(op::kI32Store, kContextLoops);
+        code_.Br(depth + 1);
+        code_.Op(op::kEnd);
+        StoreEip(block_.start_eip);
+        code_.LocalGet(done);
+        code_.I32Const(1);
+        code_.Op(op::kI32Shl);
         code_.Op(op::kReturn);
     }
 
@@ -327,7 +424,14 @@ private:
             case ir::Op::kExitIf:
                 Get(inst.a);
                 code_.If();
-                ExitConst(inst.kind, inst.imm, inst.index);
+                if (loops_ && IsLoopBack(block_, inst))
+                {
+                    LoopBack(inst.index, 1);
+                }
+                else
+                {
+                    ExitConst(inst.kind, inst.imm, inst.index);
+                }
                 code_.Op(op::kEnd);
                 return;
             case ir::Op::kExit:
@@ -336,8 +440,12 @@ private:
                     code_.LocalGet(kStateParam);
                     Get(inst.a);
                     code_.Memory(op::kI32Store, kEipOffset);
-                    code_.I32Const(EncodeExit(inst.kind, inst.index));
+                    ExitCode(inst.kind, inst.index);
                     code_.Op(op::kReturn);
+                }
+                else if (loops_ && IsLoopBack(block_, inst))
+                {
+                    LoopBack(inst.index, 0);
                 }
                 else
                 {
@@ -352,6 +460,7 @@ private:
     const ir::Block& block_;
     std::uint32_t check_helper_;
     std::uint32_t check_context_;
+    bool loops_;
     Code code_;
     std::uint32_t current_index_ = 0;
     std::uint32_t current_eip_;

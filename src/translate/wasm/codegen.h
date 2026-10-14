@@ -16,20 +16,27 @@
 namespace rex86::translate::wasm
 {
 
-// What inline checks read (design #65, decision 3), at an address the
-// generated code embeds: the guest memory's page flags (a PageFlag*) and its
-// size, which the backend refreshes before each run.
-struct CheckContext
+// What generated code reads and writes beside the guest state, at an address
+// it embeds, the backend refreshing it before each run: the guest memory's
+// page flags (a PageFlag*) and size for inline checks (design #65, decision
+// 3); the steps this call may run, the attention flag (a std::atomic<bool>*)
+// and the passes run in place for self-looping blocks (design #67).
+struct RunContext
 {
     std::uint32_t flags = 0;
     std::uint32_t size = 0;
+    std::uint32_t max_steps = 0;
+    std::uint32_t attention = 0;
+    std::uint32_t loops = 0;
 };
 
 // The function body of one block. check_helper is the table index of the
 // function judging Check operations, of type (state, memory, segment, offset,
 // bytes | write << 8) -> 1 when the access would succeed. check_context, when
-// not 0, is the wasm address of a CheckContext: a Check then calls the
-// helper only when an inline test cannot vouch for the access.
+// not 0, is the wasm address of a RunContext: a Check then calls the helper
+// only when an inline test cannot vouch for the access, and a block that
+// exits to its own start runs its next pass in place when the context allows
+// (design #67).
 ModuleSpec::Function CompileBlock(const ir::Block& block, std::uint32_t check_helper,
                                   std::uint32_t check_context = 0);
 

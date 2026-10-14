@@ -70,6 +70,10 @@ constexpr std::uint64_t kDecodeCacheWarmup = REX86_DECODE_CACHE_WARMUP;
 constexpr std::uint64_t kDecodeCacheWarmup = 64;
 #endif
 
+// The most steps one call of a translated block may run in place (design
+// #67), so that its step count fits the exit code.
+constexpr std::uint64_t kMaxStepsInPlace = std::uint64_t{1} << 30;
+
 // The batching and the module budget are kWasm's (design #49): the
 // evaluator installs each block at once and holds no modules.
 translate::TranslatorLimits Limits(const TranslationOptions& options)
@@ -366,11 +370,18 @@ Event Cpu::RunUntilStop(std::uint64_t step_budget)
                 // what it found.
                 while (true)
                 {
+                    // A block that loops to its start may run its passes in
+                    // place (design #67), within the budget and while
+                    // attention stays clear, as this loop would.
+                    translate::RunLimits limits;
+                    limits.max_steps = static_cast<std::uint32_t>(
+                        std::min<std::uint64_t>(step_budget - steps, kMaxStepsInPlace));
+                    limits.attention = &attention_.value();
                     const translate::ir::ExitResult exit =
-                        translator_->Run(*translation, state_, *memory_);
+                        translator_->Run(*translation, state_, *memory_, limits);
                     steps += exit.steps;
                     interpret_next_ = exit.kind == translate::ir::ExitKind::kInterpret;
-                    ++translation_stats_.block_runs;
+                    translation_stats_.block_runs += 1u + exit.loops;
                     translation_stats_.translated_steps += exit.steps;
                     translation_stats_.interpreter_exits += interpret_next_ ? 1u : 0u;
                     if (interpret_next_ || steps >= step_budget ||

@@ -1,6 +1,7 @@
 #include "tools/irdiff/irdiff.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cinttypes>
 #include <cstdio>
 #include <cstring>
@@ -456,7 +457,13 @@ struct Runner
         const auto length = static_cast<unsigned>(item.code.size());
         const char* label = item.label.c_str();
         Machine compiled(start);
-        const translate::ir::ExitResult exit = backend.Run(translation, compiled.state, compiled.memory);
+        // One pass, as the evaluator runs it: a self-looping block (design #67)
+        // has no room for a second.
+        const std::atomic<bool> attention{false};
+        translate::RunLimits limits;
+        limits.max_steps = block.instruction_count;
+        limits.attention = &attention;
+        const translate::ir::ExitResult exit = backend.Run(translation, compiled.state, compiled.memory, limits);
         ++stats.wasm_runs;
         Machine interpreted(start);
         for (std::uint32_t i = 0; i < exit.steps; ++i)

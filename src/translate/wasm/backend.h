@@ -33,7 +33,8 @@ public:
     [[nodiscard]] std::uint32_t BatchCapacity() const override { return batch_; }
     CompileStatus Compile(Translation* const* translations, std::uint32_t count,
                           std::uint32_t ticket) override;
-    ir::ExitResult Run(const Translation& translation, CpuState& state, GuestMemory& memory) override;
+    ir::ExitResult Run(const Translation& translation, CpuState& state, GuestMemory& memory,
+                       const RunLimits& limits) override;
     void Drop(const Translation& translation) override;
     void Finished(std::uint32_t ticket) override;
     void Discard(const std::uint32_t* handles, std::uint32_t count) override;
@@ -44,9 +45,10 @@ private:
     std::uint32_t batch_;
     // Module bytes a pending installation may still read.
     std::unordered_map<std::uint32_t, Bytes> pending_bytes_;
-    // What inline checks read (design #65), at an address every module this
-    // backend compiles embeds; Run refreshes it for the memory it runs on.
-    CheckContext check_context_;
+    // What generated code reads and writes beside the state (designs #65 and
+    // #67), at an address every module this backend compiles embeds; Run
+    // refreshes it for the memory and limits of each call.
+    RunContext context_;
 };
 
 }  // namespace rex86::translate::wasm

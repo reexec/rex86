@@ -66,7 +66,7 @@ public:
         return log_->answer;
     }
     translate::ir::ExitResult Run(const translate::Translation& translation, rex86::CpuState& state,
-                                  rex86::GuestMemory& memory) override
+                                  rex86::GuestMemory& memory, const translate::RunLimits&) override
     {
         return translate::ir::Evaluate(translation.block, state, memory);
     }
