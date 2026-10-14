@@ -75,6 +75,8 @@ const char* StopReasonName(const StopReason reason)
             return "halted";
         case StopReason::kStopRequested:
             return "stop_requested";
+        case StopReason::kHostBoundary:
+            return "host_boundary";
     }
     return "unknown";
 }

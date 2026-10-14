@@ -26,6 +26,9 @@ struct FrontendOptions
     // instruction excepted: the Cpu loop has already checked it). Null
     // when there are no gates.
     const interp::GateFilter* gates = nullptr;
+    // An instruction it calls a host boundary ends the block before it, as
+    // one the frontend does not lower does (design #70). Null when none.
+    Environment* boundaries = nullptr;
 };
 
 // True when the frontend lowers this instruction.

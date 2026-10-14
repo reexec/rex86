@@ -81,6 +81,9 @@ struct StepResult
     // fallthrough, or CS changed). Only the block loop that stops after a
     // branch clears and reads it (design #44); others leave it stale.
     bool branched = false;
+    // An input: run the next instruction even if it is a host boundary
+    // (Cpu::SkipHostBoundaryOnce, design #70). Consumed by that instruction.
+    bool skip_host_boundary = false;
 };
 
 // Executes one instruction at CS:EIP, a REP string to completion. With a
@@ -135,6 +138,8 @@ struct BlockLimits
     // Where a REP string stopping between iterations copies its decode,
     // for the next block's resume. Null keeps no copy.
     decode::DecodedInstruction* partial = nullptr;
+    // The first instruction runs even if it is a host boundary (design #70).
+    bool skip_host_boundary = false;
 };
 
 struct BlockResult

@@ -219,6 +219,12 @@ public:
     // instruction boundary or REP string iteration boundary.
     void RequestStop();
 
+    // Features::host_boundaries (design #70): the next Run executes the
+    // instruction at the current CS:EIP even though it is a host boundary,
+    // for a host that looked at it and chose to let it run as it is. Only
+    // that instruction, and only if CS:EIP has not moved before the Run.
+    void SkipHostBoundaryOnce();
+
     // Tells the engines that [address, address + size) changed under them,
     // as when the host writes code into guest memory. Clears kTranslated on
     // those pages, which raises their generation and drops every cached
@@ -284,6 +290,9 @@ private:
     // (design #32); its gate was checked when it started.
     bool in_progress_ = false;
     std::uint32_t in_progress_linear_ = 0;
+    // SkipHostBoundaryOnce's request and where it applies (design #70).
+    bool skip_host_boundary_ = false;
+    std::uint32_t skip_host_boundary_linear_ = 0;
     // That REP string's decode and CS's mode when it was decoded, from
     // which it resumes (design #50); made the first time a block runs.
     std::unique_ptr<decode::DecodedInstruction> partial_decode_;

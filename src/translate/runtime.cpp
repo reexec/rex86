@@ -13,6 +13,7 @@ Translator::Translator(std::unique_ptr<Backend> backend, const TranslatorLimits&
     : backend_(std::move(backend)),
       threshold_(limits.threshold),
       max_block_instructions_(limits.max_block_instructions == 0 ? 1u : limits.max_block_instructions),
+      boundaries_(limits.boundaries),
       batch_wait_(limits.batch_wait),
       max_modules_(limits.max_modules)
 {
@@ -156,6 +157,7 @@ void Translator::Translate(Entry* entry, const CpuState& state, GuestMemory& mem
     ir::FrontendOptions options;
     options.gates = gates;
     options.max_instructions = max_block_instructions_;
+    options.boundaries = boundaries_;
     Translation translation;
     if (!ir::FormBlock(state, memory, features, options, &translation.block))
     {

@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstring>
 #include <optional>
+#include <utility>
 
 #include "decode/decoder.h"
 #include "interp/decode_cache.h"
@@ -869,6 +870,25 @@ inline void ExecuteDecoded(StepResult& result, CpuState& state, GuestMemory& mem
         result.event.fault_address = cs.base + start_offset;
         return;
     }
+    if (features.host_boundaries && !std::exchange(result.skip_host_boundary, false))
+    {
+        if (decoded.host_boundary < 0)
+        {
+            std::uint8_t bytes[kFetchWindow] = {};
+            bool stopped_at_limit = false;
+            const unsigned fetched = Fetch(state, memory, bytes, &stopped_at_limit);
+            const unsigned length = decoded.Length() <= fetched ? decoded.Length() : fetched;
+            decoded.host_boundary =
+                environment.IsHostBoundary(bytes, static_cast<std::uint32_t>(length)) ? 1 : 0;
+        }
+        if (decoded.host_boundary > 0)
+        {
+            result.status = StepStatus::kStopped;
+            result.event.reason = StopReason::kHostBoundary;
+            result.event.gate_address = cs.base + start_offset;
+            return;
+        }
+    }
     if (features.user_mode)
     {
         const UserModeRefusal refusal =
@@ -1123,6 +1143,8 @@ BlockResult RunBlockLoop(CpuState& state, GuestMemory& memory, Environment& envi
     budget.attention = limits.attention;
     budget.partial = limits.partial;
     block.last.budget = &budget;
+    // A resumed REP string passed its boundary check when it started.
+    block.last.skip_host_boundary = limits.skip_host_boundary || limits.resume != nullptr;
     bool more = true;
     if (limits.resume != nullptr)
     {
