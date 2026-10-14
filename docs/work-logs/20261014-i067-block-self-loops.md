@@ -38,7 +38,7 @@
 
 ### 다음 / Next
 
-1. CI를 확인한다.
+1. (끝남) CI가 모두 녹색이다([실행 38529332901](https://github.com/reexec/rex86/actions/runs/38529332901)). 번역 강제 `WASM`과 브라우저 셋이 포함된다.
 2. 다른 블록으로의 연결(설계 결정 3): 정적 목적지(CALL, JMP)와 동적 목적지(RET). tail call 지원과 스택 깊이를 따져 범위를 정한다.
 
-*1 Check CI. 2 Linking to other blocks (design decision 3): static targets (CALL, JMP) and dynamic ones (RET), scoped by tail-call support and stack depth.*
+*1 (done) CI green (run 38529332901), forced `WASM` and the three browsers included. 2 Linking to other blocks (design decision 3): static targets (CALL, JMP) and dynamic ones (RET), scoped by tail-call support and stack depth.*
