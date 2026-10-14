@@ -249,8 +249,9 @@ ExecStatus ExecInterruptReturn(Ctx* ctx, std::uint32_t* next_eip)
         s.Set(Gpr::kEsp, saved_esp);
         return ExecStatus::kFault;
     }
-    const std::uint32_t mask = width == 16 ? (kEflagsPopWritable & 0xFFFFu)
-                                           : kEflagsPopWritable;
+    const std::uint32_t writable = PopWritableFlags(
+        ctx->features != nullptr && ctx->features->user_mode);
+    const std::uint32_t mask = width == 16 ? (writable & 0xFFFFu) : writable;
     s.eflags = ((s.eflags & ~mask) | (flags & mask)) | kEflagsReserved1;
     *next_eip = offset & WidthMask(width);
     return ExecStatus::kContinue;

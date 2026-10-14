@@ -40,6 +40,10 @@ enum class StopReason : std::uint8_t
     kHalted,
     // Cpu::Run was asked to stop by RequestStop.
     kStopRequested,
+    // Features::host_boundaries (design #70): the instruction at CS:EIP is
+    // one the host asked to see before it runs; it has not run, and
+    // gate_address holds its linear address.
+    kHostBoundary,
 };
 
 // The same set rePIU's platform FaultKind and re2DJ's NativeFaultKind name,
@@ -133,6 +137,19 @@ struct Features
     // D/B = 0 code and stack segments (16-bit default width), which rePIU's
     // DOS/4GW paths use.
     bool segments_16bit = false;
+    // A protected-mode process at CPL 3 with IOPL 0 and DPL 0 IDT gates,
+    // as the SDM defines it (design #69): CLI, STI, HLT, IN, OUT, INS and
+    // OUTS raise kPrivilegedInstruction and INT imm8 raises #GP (error code
+    // vector*8+2), all before retiring; POPF and IRET leave IF and IOPL
+    // alone. INT3, INTO and INT1 are unchanged. rePIU's emulated model uses
+    // it so the guest faults where it would in a Win32 process.
+    bool user_mode = false;
+    // Ask Environment::IsHostBoundary about every instruction before it runs
+    // and stop with kHostBoundary where it answers true (design #70). For a
+    // host whose own layer treats some non-faulting instructions specially,
+    // as rePIU's HLE does instructions that use segment registers. The
+    // answer is kept with the decode, so a cached instruction is asked once.
+    bool host_boundaries = false;
 };
 
 class Environment
@@ -165,6 +182,16 @@ public:
 
     // Diagnostics only: a store reached a page marked kTranslated. The core
     // has already invalidated the translation.
+    // Features::host_boundaries: whether the instruction in `bytes` (its
+    // `length` bytes, already decoded at CS:EIP) is one the host takes over
+    // before it runs. Asked once per decode; the bytes are the guest's.
+    virtual bool IsHostBoundary(const std::uint8_t* bytes, std::uint32_t length)
+    {
+        static_cast<void>(bytes);
+        static_cast<void>(length);
+        return false;
+    }
+
     virtual void OnCodePageWritten(std::uint32_t page_address)
     {
         static_cast<void>(page_address);

@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstring>
 #include <optional>
+#include <utility>
 
 #include "decode/decoder.h"
 #include "interp/decode_cache.h"
@@ -19,8 +20,6 @@ namespace rex86::interp
 
 namespace
 {
-
-constexpr std::uint32_t kPopfWritable = kEflagsPopWritable;
 
 constexpr unsigned kMaxInstructionBytes = kFetchWindow;
 
@@ -326,8 +325,10 @@ ExecStatus Execute(Ctx* ctx, std::uint32_t* next_eip, Event* stop_event)
             {
                 return ExecStatus::kFault;
             }
+            const std::uint32_t writable = PopWritableFlags(
+                ctx->features != nullptr && ctx->features->user_mode);
             const std::uint32_t mask =
-                op_width == 16 ? (kPopfWritable & 0xFFFFu) : kPopfWritable;
+                op_width == 16 ? (writable & 0xFFFFu) : writable;
             s.eflags = ((s.eflags & ~mask) | (value & mask)) |
                 kEflagsReserved1;
             return ExecStatus::kContinue;
@@ -817,6 +818,39 @@ unsigned Fetch(const CpuState& state, const GuestMemory& memory, std::uint8_t* b
 namespace
 {
 
+// Features::user_mode (design #69): the instructions a CPL 3, IOPL 0
+// process may not execute, refused before they retire. kNone lets the
+// instruction run.
+enum class UserModeRefusal : std::uint8_t
+{
+    kNone,
+    kPrivileged,  // IOPL-sensitive or CPL 0 only: #GP(0)
+    kInterruptGate,  // INT imm8 through a DPL 0 gate: #GP(vector*8+2)
+};
+
+UserModeRefusal RefusedInUserMode(const ZydisMnemonic mnemonic)
+{
+    switch (mnemonic)
+    {
+        case ZYDIS_MNEMONIC_CLI:
+        case ZYDIS_MNEMONIC_STI:
+        case ZYDIS_MNEMONIC_HLT:
+        case ZYDIS_MNEMONIC_IN:
+        case ZYDIS_MNEMONIC_OUT:
+        case ZYDIS_MNEMONIC_INSB:
+        case ZYDIS_MNEMONIC_INSW:
+        case ZYDIS_MNEMONIC_INSD:
+        case ZYDIS_MNEMONIC_OUTSB:
+        case ZYDIS_MNEMONIC_OUTSW:
+        case ZYDIS_MNEMONIC_OUTSD:
+            return UserModeRefusal::kPrivileged;
+        case ZYDIS_MNEMONIC_INT:
+            return UserModeRefusal::kInterruptGate;
+        default:
+            return UserModeRefusal::kNone;
+    }
+}
+
 // Executes an instruction already decoded at CS:EIP.
 // The result is written in place: the block loop keeps one StepResult for
 // all its instructions rather than copying one out per instruction (design
@@ -835,6 +869,48 @@ inline void ExecuteDecoded(StepResult& result, CpuState& state, GuestMemory& mem
         result.event.fault_kind = FaultKind::kIllegalInstruction;
         result.event.fault_address = cs.base + start_offset;
         return;
+    }
+    if (features.host_boundaries && !std::exchange(result.skip_host_boundary, false))
+    {
+        if (decoded.host_boundary < 0)
+        {
+            std::uint8_t bytes[kFetchWindow] = {};
+            bool stopped_at_limit = false;
+            const unsigned fetched = Fetch(state, memory, bytes, &stopped_at_limit);
+            const unsigned length = decoded.Length() <= fetched ? decoded.Length() : fetched;
+            decoded.host_boundary =
+                environment.IsHostBoundary(bytes, static_cast<std::uint32_t>(length)) ? 1 : 0;
+        }
+        if (decoded.host_boundary > 0)
+        {
+            result.status = StepStatus::kStopped;
+            result.event.reason = StopReason::kHostBoundary;
+            result.event.gate_address = cs.base + start_offset;
+            return;
+        }
+    }
+    if (features.user_mode)
+    {
+        const UserModeRefusal refusal =
+            RefusedInUserMode(decoded.instruction.mnemonic);
+        if (refusal != UserModeRefusal::kNone)
+        {
+            result.status = StepStatus::kFaulted;
+            result.event.reason = StopReason::kFault;
+            if (refusal == UserModeRefusal::kPrivileged)
+            {
+                result.event.fault_kind = FaultKind::kPrivilegedInstruction;
+                result.event.fault_address = cs.base + start_offset;
+            }
+            else
+            {
+                // The error code names the IDT entry: index * 8, IDT bit 1.
+                result.event.fault_kind = FaultKind::kGeneralProtection;
+                result.event.fault_address = static_cast<std::uint32_t>(
+                    decoded.operands[0].imm.value.u & 0xFFu) * 8u + 2u;
+            }
+            return;
+        }
     }
 
     // Faults are precise: the integer state the instruction started from
@@ -1067,6 +1143,8 @@ BlockResult RunBlockLoop(CpuState& state, GuestMemory& memory, Environment& envi
     budget.attention = limits.attention;
     budget.partial = limits.partial;
     block.last.budget = &budget;
+    // A resumed REP string passed its boundary check when it started.
+    block.last.skip_host_boundary = limits.skip_host_boundary || limits.resume != nullptr;
     bool more = true;
     if (limits.resume != nullptr)
     {

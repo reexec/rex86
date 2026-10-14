@@ -246,6 +246,8 @@ if(REX86_BUILD_TESTS)
         tests/unit/census_test.cpp
         tests/unit/moo_reader_test.cpp
         tests/unit/interp_test.cpp
+        tests/unit/user_mode_test.cpp
+        tests/unit/host_boundary_test.cpp
         tests/unit/x87_test.cpp
         tests/unit/x87_transcendental_test.cpp
         tests/unit/post386_test.cpp

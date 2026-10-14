@@ -37,6 +37,10 @@ struct DecodedInstruction
     ZydisDecodedInstruction instruction{};
     ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT] = {};
     std::uint32_t guest_address = 0;
+    // Environment::IsHostBoundary's answer for these bytes (design #70):
+    // -1 not asked yet, 0 no, 1 yes. Mutable because the decode cache hands
+    // out const decodes and the answer belongs with them.
+    mutable std::int8_t host_boundary = -1;
 
     std::uint32_t Length() const
     {

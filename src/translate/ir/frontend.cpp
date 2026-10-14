@@ -953,7 +953,9 @@ bool FormBlock(const CpuState& state, const GuestMemory& memory, const Features&
         probe.eip = eip;
         const unsigned fetched = interp::Fetch(probe, memory, bytes, &stopped_at_limit);
         decode::DecodedInstruction d;
-        if (fetched == 0 || !decoder.Decode(bytes, fetched, eip, &d) || !Covered(d, features))
+        if (fetched == 0 || !decoder.Decode(bytes, fetched, eip, &d) || !Covered(d, features) ||
+            (options.boundaries != nullptr &&
+             options.boundaries->IsHostBoundary(bytes, d.Length())))
         {
             if (index == 0)
             {

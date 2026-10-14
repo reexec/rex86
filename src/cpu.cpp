@@ -76,9 +76,12 @@ constexpr std::uint64_t kMaxStepsInPlace = std::uint64_t{1} << 30;
 
 // The batching and the module budget are kWasm's (design #49): the
 // evaluator installs each block at once and holds no modules.
-translate::TranslatorLimits Limits(const TranslationOptions& options)
+translate::TranslatorLimits Limits(const TranslationOptions& options, const Features& features,
+                                   Environment* environment)
 {
     translate::TranslatorLimits limits;
+    // A block ends before a host boundary (design #70).
+    limits.boundaries = features.host_boundaries ? environment : nullptr;
     limits.threshold = options.threshold;
     limits.max_block_instructions = options.max_block_instructions;
     if (options.mode == TranslationMode::kWasm)
@@ -108,7 +111,7 @@ bool Cpu::SetTranslation(const TranslationOptions& options)
             return true;
         case TranslationMode::kEvaluator:
             translator_ = std::make_unique<translate::Translator>(
-                std::make_unique<translate::EvaluatorBackend>(), Limits(options));
+                std::make_unique<translate::EvaluatorBackend>(), Limits(options, features_, environment_));
             return true;
         case TranslationMode::kWasm:
             if (!translate::wasm::Runnable() || options.wasm == nullptr)
@@ -121,7 +124,7 @@ bool Cpu::SetTranslation(const TranslationOptions& options)
             translator_ = std::make_unique<translate::Translator>(
                 std::make_unique<translate::wasm::WasmBackend>(options.wasm,
                                                                options.blocks_per_module),
-                Limits(options));
+                Limits(options, features_, environment_));
             return true;
     }
     return false;
@@ -444,6 +447,8 @@ Event Cpu::RunUntilStop(std::uint64_t step_budget)
             partial_decode_ = std::make_unique<decode::DecodedInstruction>();
         }
         limits.partial = partial_decode_.get();
+        limits.skip_host_boundary = skip_host_boundary_ && LinearEip() == skip_host_boundary_linear_;
+        skip_host_boundary_ = false;
         if (in_progress_ && LinearEip() == in_progress_linear_ &&
             state_.Seg(Segment::kCs).default_32bit == partial_32bit_)
         {
@@ -474,6 +479,12 @@ Event Cpu::RunUntilStop(std::uint64_t step_budget)
 Event Cpu::Step()
 {
     return Run(1);
+}
+
+void Cpu::SkipHostBoundaryOnce()
+{
+    skip_host_boundary_ = true;
+    skip_host_boundary_linear_ = LinearEip();
 }
 
 void Cpu::RequestStop()

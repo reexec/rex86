@@ -113,6 +113,9 @@ struct TranslatorLimits
     // Live modules (batches) beyond which the oldest is evicted; 0 for none
     // (design #49, decision 3).
     std::uint32_t max_modules = 0;
+    // Asked about each instruction a block would take; a host boundary ends
+    // the block before it (design #70). Null when the host has none.
+    Environment* boundaries = nullptr;
 };
 
 class Translator
@@ -263,6 +266,7 @@ private:
     std::unique_ptr<Backend> backend_;
     std::uint32_t threshold_;
     std::uint32_t max_block_instructions_;
+    Environment* boundaries_;
     std::uint32_t batch_wait_;
     std::uint32_t max_modules_;
     std::unordered_map<std::uint32_t, Entry> entries_;

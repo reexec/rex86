@@ -81,6 +81,8 @@ const char* StopReasonName(rex86::StopReason reason)
         return "halted";
     case rex86::StopReason::kStopRequested:
         return "stop_requested";
+    case rex86::StopReason::kHostBoundary:
+        return "host_boundary";
     }
     return "unknown";
 }
