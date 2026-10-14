@@ -61,7 +61,11 @@ CompileStatus WasmBackend::Compile(Translation* const* translations, const std::
     {
         blocks[i] = &translations[i]->block;
     }
-    Bytes bytes = CompileModule(blocks, count, CheckHelperIndex());
+    // The context's address is a wasm address in wasm32 alone; elsewhere
+    // the modules are never run and check through the helper.
+    const std::uint32_t context =
+        Runnable() ? static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&check_context_)) : 0u;
+    Bytes bytes = CompileModule(blocks, count, CheckHelperIndex(), context);
     std::uint32_t indices[kMaxBatchBlocks];
     const WasmInstall answer = services_->Install(ticket, bytes.data(), bytes.size(), count, indices);
     switch (answer)
@@ -84,6 +88,8 @@ CompileStatus WasmBackend::Compile(Translation* const* translations, const std::
 ir::ExitResult WasmBackend::Run(const Translation& translation, CpuState& state, GuestMemory& memory)
 {
 #if defined(__EMSCRIPTEN__)
+    check_context_.flags = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(memory.pages().data()));
+    check_context_.size = memory.size();
     const auto function =
         reinterpret_cast<BlockFunction>(static_cast<std::uintptr_t>(translation.handle));
     const std::uint32_t code = function(&state, &memory,

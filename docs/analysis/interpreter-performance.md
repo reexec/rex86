@@ -154,6 +154,26 @@
 
 *Confirmed: the three engines measured in a Worker of headless Chromium 153 and Firefox 155 on the same machine keep Node's order and ratios: wasm over the interpreter is 8.9 (Chromium) and 9.9 (Firefox) on alu, 4.7 and 3.8 on call, 1.3 and 1.4 on mixed, with wasm's alu at 216.0 and 227.3 MIPS; the table and conditions are in that document.*
 
+## 2.6 디스패치 빠른 경로와 인라인 검사 뒤 (2026-10-14, #65) / After the dispatch fast path and inline checks
+
+근거: [#65 설계](../design/20261014-i065-translation-dispatch.md), [로그](../work-logs/20261014-i065-translation-dispatch.md). 호스트 F(Intel Core i5-7200U, WSL2, emsdk 6.0.8 wasm32 Release, Node 24.19.0). 측정 중 다른 일로 부하 평균이 4~5였다. 그래서 절대값은 2.4절과 비교하지 않고, 같은 시간에 번갈아 일곱 번 돌린 가장 좋은 값끼리 비교한다(wasm, 10프레임).
+
+*Grounds: the #65 design and log. Host F (Intel Core i5-7200U, WSL2, an emsdk 6.0.8 wasm32 Release build, Node 24.19.0), with a load average of 4 to 5 from other work during the measurement; absolute figures are not compared with section 2.4, only the best of seven interleaved runs taken at the same time (wasm, 10 frames).*
+
+| 워크로드 / workload | v0.0.31 | #65 | 변화 / change |
+|---|---:|---:|---:|
+| alu | 44.1 | 56.2 | +28% |
+| memory | 28.7 | 39.3 | +37% |
+| call | 25.6 | 43.4 | +69% |
+| blocks | 1.91 | 1.87 | — |
+| mixed | 14.6 | 15.5 | +6% |
+
+* **확인됨**: 범위 안의 블록 하나는 v0.0.31에서 본체가 4분의 1 남짓이었다. 디스패치가 32~42%, 메모리 검사 도우미 호출이 memory 18%와 call 30%를 차지했다.
+* **확인됨**: #65 뒤에는 도우미 호출이 사라졌다. 디스패치(`RunUntilStop`의 안쪽 고리, `WasmBackend::Run`)가 call과 memory에서 약 30% 남는다. 더 줄이려면 블록 연결이 필요하다.
+* `blocks`는 설치와 디코드가, `mixed`는 인터프리터(x87, REP 문자열)가 지배한다. 이 둘은 번역 범위를 넓히는 일(REP 문자열, x87)과 블록 연결의 몫이다.
+
+*Confirmed: inside the coverage one block's body was about a quarter of its time in v0.0.31, dispatch taking 32 to 42% and the memory-check helper call 18% on memory and 30% on call. Confirmed: after #65 the helper call is gone and dispatch (`RunUntilStop`'s inner loop, `WasmBackend::Run`) stays at some 30% on call and memory, the rest needing block linking. `blocks` is dominated by installation and decoding and `mixed` by the interpreter (x87, REP strings): those are for widening the coverage (REP strings, the x87) and block linking.*
+
 ## 3. 읽는 법 / Reading
 
 * **확인됨(#27 시점)**: 인터프리터는 명령 종류와 거의 무관하게 2~4.5 MIPS였다. `alu`(레지스터만)와 `memory`(적재와 저장)가 비슷하고, `call`도 비슷하다. 명령 하나의 비용이 의미 계산이 아니라 **디스패치(인출, 디코드, 피연산자 해석)에 지배된다**는 뜻이다. #21 설계의 프로파일(인출과 페이지 검사 40%, 디코드 27%)과 맞는다. 다음 단계(블록 캐시, 디코드 캐시, 번역 백엔드)의 근거였고, #34의 디코드 캐시가 이것을 확인했다(2.1절).

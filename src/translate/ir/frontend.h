@@ -33,7 +33,12 @@ bool Covered(const decode::DecodedInstruction& decoded, const Features& features
 
 // True when a block can be formed under this state's modes: a flat 32-bit
 // CS and a 32-bit SS. A block assumes them; whoever runs it checks first.
-bool ModesSupported(const CpuState& state);
+// Inline: the dispatch asks before every translated block (design #65).
+inline bool ModesSupported(const CpuState& state)
+{
+    const SegmentRegister& cs = state.Seg(Segment::kCs);
+    return cs.IsFlat() && cs.default_32bit && state.Seg(Segment::kSs).default_32bit;
+}
 
 // Forms the block starting at CS:EIP. Returns false, leaving *block
 // unspecified, when no block can start there: the modes are not supported,

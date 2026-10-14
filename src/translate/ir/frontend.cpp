@@ -907,12 +907,6 @@ bool Covered(const decode::DecodedInstruction& d, const Features& features)
     return OperandsSupported(d) && CoveredMnemonic(d);
 }
 
-bool ModesSupported(const CpuState& state)
-{
-    const SegmentRegister& cs = state.Seg(Segment::kCs);
-    return cs.IsFlat() && cs.default_32bit && state.Seg(Segment::kSs).default_32bit;
-}
-
 bool FormBlock(const CpuState& state, const GuestMemory& memory, const Features& features,
                const FrontendOptions& options, Block* block)
 {

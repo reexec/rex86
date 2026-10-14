@@ -150,21 +150,6 @@ void Translator::Fail(const std::uint32_t ticket)
     Refuse(ticket, heads);
 }
 
-bool Translator::StillValid(const ir::Block& block, const GuestMemory& memory)
-{
-    // A store into translated code, InvalidateCode or the host's own page
-    // changes clear kTranslated, which raises the generation (design #34,
-    // decision 2).
-    for (std::uint32_t i = 0; i < block.page_count; ++i)
-    {
-        if (memory.pages().Generation(block.pages[i]) != block.generations[i])
-        {
-            return false;
-        }
-    }
-    return true;
-}
-
 void Translator::Translate(Entry* entry, const CpuState& state, GuestMemory& memory,
                            const Features& features, const interp::GateFilter* gates)
 {
@@ -269,19 +254,28 @@ void Translator::Submit(const GuestMemory& memory)
     modules_[ticket] = Module{std::move(heads), count};
 }
 
-const Translation* Translator::Lookup(const CpuState& state, GuestMemory& memory,
-                                      const Features& features, const interp::GateFilter* gates)
+const Translation* Translator::LookupSlow(const CpuState& state, GuestMemory& memory,
+                                          const Features& features, const interp::GateFilter* gates)
 {
-    if (entries_.size() >= kMaxEntries && entries_.find(state.eip) == entries_.end())
-    {
-        Flush();
-    }
-    ++lookups_;
+    // Lookup has counted this lookup.
     if (!queue_.empty() && lookups_ - queue_since_ >= batch_wait_)
     {
         Submit(memory);
     }
+    // The cache again when a batch was due: Submit above may have evicted
+    // the block, so its state is read after it (design #65).
+    CacheSlot& slot = cache_[CacheIndex(state.eip)];
+    if (slot.entry != nullptr && slot.eip == state.eip && slot.entry->state == State::kTranslated &&
+        StillValid(slot.entry->translation.block, memory))
+    {
+        return &slot.entry->translation;
+    }
+    if (entries_.size() >= kMaxEntries && entries_.find(state.eip) == entries_.end())
+    {
+        Flush();
+    }
     Entry& entry = entries_[state.eip];
+    slot = CacheSlot{state.eip, &entry};
     switch (entry.state)
     {
         case State::kTranslated:
@@ -339,6 +333,7 @@ void Translator::Flush()
     entries_.clear();
     queue_.clear();
     modules_.clear();
+    cache_.fill(CacheSlot{});
     // Tickets still out are discarded when they complete.
 }
 

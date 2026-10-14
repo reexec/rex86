@@ -4,6 +4,7 @@
 #include <type_traits>
 
 #include "rex86/cpu_state.h"
+#include "rex86/guest_memory.h"
 
 namespace rex86::translate::wasm
 {
@@ -23,18 +24,28 @@ constexpr std::uint32_t kGprOffset = offsetof(CpuState, gpr);
 constexpr std::uint32_t kEipOffset = offsetof(CpuState, eip);
 constexpr std::uint32_t kEflagsOffset = offsetof(CpuState, eflags);
 
+std::uint32_t SegmentOffset(const std::uint8_t segment)
+{
+    return static_cast<std::uint32_t>(offsetof(CpuState, segments) + segment * sizeof(SegmentRegister));
+}
+
 std::uint32_t SegmentBaseOffset(const std::uint8_t segment)
 {
-    return static_cast<std::uint32_t>(offsetof(CpuState, segments) +
-                                      segment * sizeof(SegmentRegister) +
-                                      offsetof(SegmentRegister, base));
+    return SegmentOffset(segment) + static_cast<std::uint32_t>(offsetof(SegmentRegister, base));
 }
+
+// The check context's fields (CheckContext in codegen.h).
+constexpr std::uint32_t kContextFlags = 0;
+constexpr std::uint32_t kContextSize = 4;
+static_assert(offsetof(CheckContext, flags) == kContextFlags && offsetof(CheckContext, size) == kContextSize,
+              "generated code reads the check context by these offsets");
 
 class Generator
 {
 public:
-    Generator(const ir::Block& block, const std::uint32_t check_helper)
-        : block_(block), check_helper_(check_helper), current_eip_(block.start_eip)
+    Generator(const ir::Block& block, const std::uint32_t check_helper, const std::uint32_t check_context)
+        : block_(block), check_helper_(check_helper), check_context_(check_context),
+          current_eip_(block.start_eip)
     {
     }
 
@@ -47,13 +58,22 @@ public:
         // The evaluator's fallback for a block without a final exit.
         ExitConst(ir::ExitKind::kInterpret, current_eip_, current_index_);
         ModuleSpec::Function function;
-        function.locals = static_cast<std::uint32_t>(block_.insts.size());
+        // The values, then the inline check's three temporaries.
+        function.locals = static_cast<std::uint32_t>(block_.insts.size()) + kTemporaries;
         function.code = code_.bytes();
         return function;
     }
 
 private:
+    static constexpr std::uint32_t kTemporaries = 3;
+
     static std::uint32_t Local(const ir::Value value) { return kFirstValueLocal + value; }
+
+    // The inline check's temporaries, after the values.
+    [[nodiscard]] std::uint32_t Temporary(const std::uint32_t i) const
+    {
+        return kFirstValueLocal + static_cast<std::uint32_t>(block_.insts.size()) + i;
+    }
 
     void Get(const ir::Value value) { code_.LocalGet(Local(value)); }
 
@@ -66,6 +86,93 @@ private:
         code_.Op(op::kI32Add);
         Get(offset);
         code_.Op(op::kI32Add);
+    }
+
+    // Sets temporary 0 when the access surely succeeds (design #65, decision
+    // 3): a flat segment, writable when written, the range inside memory, and
+    // its first and last pages mapped and readable or writable, and when
+    // written not translated. That is AccessWouldSucceed restated for its
+    // common case, never more permissive; anything else leaves it clear and
+    // the helper judges. The pages are read only once the range is known to
+    // be inside memory, so the flags array is never read past its end.
+    void InlineCheck(const ir::Inst& inst)
+    {
+        const std::uint32_t segment = SegmentOffset(inst.slot);
+        const std::uint32_t ok = Temporary(0);
+        const std::uint32_t first = Temporary(1);
+        const std::uint32_t last = Temporary(2);
+        code_.LocalGet(kStateParam);
+        code_.Memory(op::kI32Load, segment + static_cast<std::uint32_t>(offsetof(SegmentRegister, base)));
+        code_.Op(op::kI32Eqz);
+        code_.LocalGet(kStateParam);
+        code_.Memory(op::kI32Load, segment + static_cast<std::uint32_t>(offsetof(SegmentRegister, limit)));
+        code_.I32Const(0xFFFFFFFFu);
+        code_.Op(op::kI32Eq);
+        code_.Op(op::kI32And);
+        if (inst.write)
+        {
+            code_.LocalGet(kStateParam);
+            code_.Memory(op::kI32Load8U, segment + static_cast<std::uint32_t>(offsetof(SegmentRegister, writable)));
+            code_.Op(op::kI32And);
+        }
+        // offset < size, and size - offset >= bytes.
+        Get(inst.a);
+        code_.I32Const(check_context_);
+        code_.Memory(op::kI32Load, kContextSize);
+        code_.Op(op::kI32LtU);
+        code_.Op(op::kI32And);
+        code_.I32Const(check_context_);
+        code_.Memory(op::kI32Load, kContextSize);
+        Get(inst.a);
+        code_.Op(op::kI32Sub);
+        code_.I32Const(inst.bytes);
+        code_.Op(op::kI32LtU);
+        code_.Op(op::kI32Eqz);
+        code_.Op(op::kI32And);
+        code_.LocalSet(ok);
+        code_.LocalGet(ok);
+        code_.If();
+        PageFlags(inst.a, 0, first);
+        PageFlags(inst.a, inst.bytes - 1u, last);
+        const auto wanted = static_cast<std::uint32_t>(PageFlag::kMapped | (inst.write ? PageFlag::kWrite
+                                                                                       : PageFlag::kRead));
+        code_.LocalGet(first);
+        code_.LocalGet(last);
+        code_.Op(op::kI32And);
+        code_.I32Const(wanted);
+        code_.Op(op::kI32And);
+        code_.I32Const(wanted);
+        code_.Op(op::kI32Eq);
+        if (inst.write)
+        {
+            code_.LocalGet(first);
+            code_.LocalGet(last);
+            code_.Op(op::kI32Or);
+            code_.I32Const(static_cast<std::uint32_t>(PageFlag::kTranslated));
+            code_.Op(op::kI32And);
+            code_.Op(op::kI32Eqz);
+            code_.Op(op::kI32And);
+        }
+        code_.LocalSet(ok);
+        code_.Op(op::kEnd);
+    }
+
+    // into = the flags byte of the page holding offset + delta.
+    void PageFlags(const ir::Value offset, const std::uint32_t delta, const std::uint32_t into)
+    {
+        code_.I32Const(check_context_);
+        code_.Memory(op::kI32Load, kContextFlags);
+        Get(offset);
+        if (delta != 0)
+        {
+            code_.I32Const(delta);
+            code_.Op(op::kI32Add);
+        }
+        code_.I32Const(kGuestPageShift);
+        code_.Op(op::kI32ShrU);
+        code_.Op(op::kI32Add);
+        code_.Memory(op::kI32Load8U, 0);
+        code_.LocalSet(into);
     }
 
     void StoreEip(const std::uint32_t eip)
@@ -188,6 +295,15 @@ private:
                              0);
                 return;
             case ir::Op::kCheck:
+                // With a context, the helper is called only when the inline
+                // check cannot vouch for the access.
+                if (check_context_ != 0)
+                {
+                    InlineCheck(inst);
+                    code_.LocalGet(Temporary(0));
+                    code_.Op(op::kI32Eqz);
+                    code_.If();
+                }
                 code_.LocalGet(kStateParam);
                 code_.LocalGet(kMemoryParam);
                 code_.I32Const(inst.slot);
@@ -199,6 +315,10 @@ private:
                 code_.If();
                 ExitConst(ir::ExitKind::kInterpret, current_eip_, current_index_);
                 code_.Op(op::kEnd);
+                if (check_context_ != 0)
+                {
+                    code_.Op(op::kEnd);
+                }
                 return;
             case ir::Op::kBegin:
                 current_index_ = inst.index;
@@ -231,6 +351,7 @@ private:
 
     const ir::Block& block_;
     std::uint32_t check_helper_;
+    std::uint32_t check_context_;
     Code code_;
     std::uint32_t current_index_ = 0;
     std::uint32_t current_eip_;
@@ -238,18 +359,19 @@ private:
 
 }  // namespace
 
-ModuleSpec::Function CompileBlock(const ir::Block& block, const std::uint32_t check_helper)
+ModuleSpec::Function CompileBlock(const ir::Block& block, const std::uint32_t check_helper,
+                                  const std::uint32_t check_context)
 {
-    return Generator(block, check_helper).Run();
+    return Generator(block, check_helper, check_context).Run();
 }
 
 Bytes CompileModule(const ir::Block* const* blocks, const std::uint32_t count,
-                    const std::uint32_t check_helper)
+                    const std::uint32_t check_helper, const std::uint32_t check_context)
 {
     ModuleSpec spec;
     for (std::uint32_t i = 0; i < count; ++i)
     {
-        spec.functions.push_back(CompileBlock(*blocks[i], check_helper));
+        spec.functions.push_back(CompileBlock(*blocks[i], check_helper, check_context));
     }
     return WriteModule(spec);
 }

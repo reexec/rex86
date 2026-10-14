@@ -48,12 +48,6 @@ void PageAttributeTable::Update(const std::uint32_t page, const PageFlag flags)
     flags_[page] = flags;
 }
 
-std::uint32_t PageAttributeTable::Generation(std::uint32_t address) const
-{
-    const std::uint32_t page = address >> kGuestPageShift;
-    return page < generations_.size() ? generations_[page] : 0u;
-}
-
 PageFlag PageAttributeTable::Get(std::uint32_t address) const
 {
     const std::uint32_t page = address >> kGuestPageShift;

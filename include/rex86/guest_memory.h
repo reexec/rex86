@@ -70,6 +70,13 @@ public:
         return static_cast<std::uint32_t>(flags_.size());
     }
 
+    // The flags of every page, one byte each, page_count() of them: for an
+    // engine that checks pages inline (the wasm backend, #65).
+    [[nodiscard]] const PageFlag* data() const
+    {
+        return flags_.data();
+    }
+
     // The flags of the page holding address, or kNone past the end.
     [[nodiscard]] PageFlag Get(std::uint32_t address) const;
 
@@ -90,7 +97,12 @@ public:
     // translated and trusts the translation only while it is unchanged, which
     // keeps every Cpu sharing this memory correct (design #34, decision 2).
     // Zero past the end.
-    [[nodiscard]] std::uint32_t Generation(std::uint32_t address) const;
+    // Inline: translation dispatch reads it before every block (#65).
+    [[nodiscard]] std::uint32_t Generation(const std::uint32_t address) const
+    {
+        const std::uint32_t page = address >> kGuestPageShift;
+        return page < generations_.size() ? generations_[page] : 0u;
+    }
 
 private:
     void Update(std::uint32_t page, PageFlag flags);

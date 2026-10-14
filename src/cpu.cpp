@@ -277,6 +277,11 @@ Event Cpu::RunUntilStop(std::uint64_t step_budget)
     // (design #32).
     Event event;
     std::uint64_t steps = 0;
+    // The translated loop's lookup of the head it stopped at (design #65),
+    // which the dispatch below takes instead of looking up again.
+    const translate::Translation* prefetched = nullptr;
+    std::uint32_t prefetched_eip = 0;
+    bool looked_up = false;
 
     while (true)
     {
@@ -344,17 +349,47 @@ Event Cpu::RunUntilStop(std::uint64_t step_budget)
             translate::ir::ModesSupported(state_))
         {
             const translate::Translation* translation =
-                translator_->Lookup(state_, *memory_, features_, gates);
+                looked_up && prefetched_eip == state_.eip
+                    ? prefetched
+                    : translator_->Lookup(state_, *memory_, features_, gates);
+            looked_up = false;
             if (translation != nullptr &&
                 translation->block.instruction_count <= step_budget - steps)
             {
-                const translate::ir::ExitResult exit =
-                    translator_->Run(*translation, state_, *memory_);
-                steps += exit.steps;
-                interpret_next_ = exit.kind == translate::ir::ExitKind::kInterpret;
-                ++translation_stats_.block_runs;
-                translation_stats_.translated_steps += exit.steps;
-                translation_stats_.interpreter_exits += interpret_next_ ? 1u : 0u;
+                // Translated blocks that follow one another run in this loop
+                // (design #65). Of the checks above, a stop request and a
+                // pending interrupt both raise attention, a gate can only be
+                // at a head the filter flags, and a translated block leaves
+                // the interrupt shadow and a REP string alone; so attention,
+                // the filter, the budget and the modes are what end it. The
+                // lookup for the next head is done once: the loop above takes
+                // what it found.
+                while (true)
+                {
+                    const translate::ir::ExitResult exit =
+                        translator_->Run(*translation, state_, *memory_);
+                    steps += exit.steps;
+                    interpret_next_ = exit.kind == translate::ir::ExitKind::kInterpret;
+                    ++translation_stats_.block_runs;
+                    translation_stats_.translated_steps += exit.steps;
+                    translation_stats_.interpreter_exits += interpret_next_ ? 1u : 0u;
+                    if (interpret_next_ || steps >= step_budget ||
+                        attention_.value().load(std::memory_order_relaxed) ||
+                        !translate::ir::ModesSupported(state_) ||
+                        (gates != nullptr && gates->MayContain(state_.eip)))
+                    {
+                        break;
+                    }
+                    translation = translator_->Lookup(state_, *memory_, features_, gates);
+                    if (translation == nullptr ||
+                        translation->block.instruction_count > step_budget - steps)
+                    {
+                        prefetched = translation;
+                        prefetched_eip = state_.eip;
+                        looked_up = true;
+                        break;
+                    }
+                }
                 continue;
             }
         }
