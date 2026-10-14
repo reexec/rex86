@@ -307,6 +307,56 @@ void WasmBatchTests(rex86::test::Context& context)
     REX86_CHECK(context, deferred.cpu.translation_stats().block_runs > 0);
 }
 
+// A block that loops to its own start runs its passes in place (design #67):
+// with the budget cut into small slices the translated run stops where the
+// interpreter does after every slice, and with attention raised (a pending
+// interrupt while IF is clear) it still matches.
+void WasmLoopTests(rex86::test::Context& context)
+{
+    rex86::host::web::WebWasmModuleServices services;
+    rex86::TranslationOptions options;
+    options.mode = rex86::TranslationMode::kWasm;
+    options.threshold = 0;
+    options.wasm = &services;
+    options.blocks_per_module = 1;
+    for (const std::uint64_t slice : {std::uint64_t{1}, std::uint64_t{3}, std::uint64_t{7},
+                                      std::uint64_t{50}, std::uint64_t{1000000}})
+    {
+        Rig interpreted(kLoop);
+        Rig translated(kLoop);
+        REX86_CHECK(context, translated.cpu.SetTranslation(options));
+        bool same = true;
+        for (int i = 0; i < 100000 && same; ++i)
+        {
+            const rex86::Event a = interpreted.cpu.Run(slice);
+            const rex86::Event b = translated.cpu.Run(slice);
+            same = a.reason == b.reason && a.steps == b.steps && SameMachine(interpreted, translated);
+            if (a.reason != rex86::StopReason::kBudgetExhausted)
+            {
+                break;
+            }
+        }
+        if (!same)
+        {
+            context.Fail("loop in place, slice " + std::to_string(slice), __FILE__, __LINE__);
+        }
+        const rex86::TranslationStats stats = translated.cpu.translation_stats();
+        REX86_CHECK(context, stats.translated_steps > 0);
+        REX86_CHECK(context, stats.block_runs >= stats.translated_steps / 4u);
+    }
+
+    Rig interpreted(kLoop);
+    Rig translated(kLoop);
+    REX86_CHECK(context, translated.cpu.SetTranslation(options));
+    interpreted.cpu.RaiseInterrupt(0x20);
+    translated.cpu.RaiseInterrupt(0x20);
+    const rex86::Event a = interpreted.cpu.Run(1000000);
+    const rex86::Event b = translated.cpu.Run(1000000);
+    REX86_CHECK(context, a.reason == rex86::StopReason::kHalted && b.reason == a.reason);
+    REX86_CHECK_EQ(context, b.steps, a.steps);
+    REX86_CHECK(context, SameMachine(interpreted, translated));
+}
+
 // Generated memory checks (design #65, decision 3): inline where they can
 // vouch for an access, the helper otherwise. Either way a translated run
 // faults, exits or completes exactly where the interpreter does.
@@ -384,5 +434,6 @@ void RunWasmBackendTests(rex86::test::Context& context)
     WasmRunTests(context);
     WasmBatchTests(context);
     WasmCheckTests(context);
+    WasmLoopTests(context);
 #endif
 }

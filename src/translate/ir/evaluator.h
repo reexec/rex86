@@ -22,6 +22,9 @@ struct ExitResult
     std::uint32_t eip = 0;
     // Guest instructions completed before the exit.
     std::uint32_t steps = 0;
+    // Further passes a backend ran in place, a self-looping block going back
+    // to its start (design #67); steps counts them all.
+    std::uint32_t loops = 0;
 };
 
 // True when the interpreter's access would complete without a fault and

@@ -80,6 +80,18 @@ void Code::If()
     bytes_.push_back(kBlockTypeEmpty);
 }
 
+void Code::Loop()
+{
+    bytes_.push_back(op::kLoop);
+    bytes_.push_back(kBlockTypeEmpty);
+}
+
+void Code::Br(const std::uint32_t depth)
+{
+    bytes_.push_back(op::kBr);
+    AppendU32(&bytes_, depth);
+}
+
 void Code::CallIndirect(const std::uint32_t type_index)
 {
     bytes_.push_back(op::kCallIndirect);

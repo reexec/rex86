@@ -47,6 +47,15 @@ enum class CompileStatus : std::uint8_t
     kFailed,   // never runnable; the block stays with the interpreter
 };
 
+// What a run of a block may do beyond one pass (design #67): a backend may
+// run a block that loops to its own start again in place, while max_steps
+// covers another whole pass and attention (a std::atomic<bool>) is clear.
+struct RunLimits
+{
+    std::uint32_t max_steps = 0;
+    const void* attention = nullptr;
+};
+
 class Backend
 {
 public:
@@ -57,8 +66,8 @@ public:
     // every handle is set.
     virtual CompileStatus Compile(Translation* const* translations, std::uint32_t count,
                                   std::uint32_t ticket) = 0;
-    virtual ir::ExitResult Run(const Translation& translation, CpuState& state,
-                               GuestMemory& memory) = 0;
+    virtual ir::ExitResult Run(const Translation& translation, CpuState& state, GuestMemory& memory,
+                               const RunLimits& limits) = 0;
     // A ready translation is dropped: the backend may free what it holds.
     virtual void Drop(const Translation&) {}
     // A pending installation ended (completed, failed, or abandoned).
@@ -78,8 +87,9 @@ public:
     {
         return CompileStatus::kReady;
     }
-    ir::ExitResult Run(const Translation& translation, CpuState& state,
-                       GuestMemory& memory) override
+    // One pass: the evaluator serves verification, not speed.
+    ir::ExitResult Run(const Translation& translation, CpuState& state, GuestMemory& memory,
+                       const RunLimits&) override
     {
         return ir::Evaluate(translation.block, state, memory, &values_);
     }
@@ -143,9 +153,10 @@ public:
         return LookupSlow(state, memory, features, gates);
     }
 
-    ir::ExitResult Run(const Translation& translation, CpuState& state, GuestMemory& memory)
+    ir::ExitResult Run(const Translation& translation, CpuState& state, GuestMemory& memory,
+                       const RunLimits& limits)
     {
-        return backend_->Run(translation, state, memory);
+        return backend_->Run(translation, state, memory, limits);
     }
 
     // Drops every translation and count.

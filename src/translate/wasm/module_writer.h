@@ -16,8 +16,10 @@ using Bytes = std::vector<std::uint8_t>;
 
 namespace op
 {
+inline constexpr std::uint8_t kLoop = 0x03;
 inline constexpr std::uint8_t kIf = 0x04;
 inline constexpr std::uint8_t kEnd = 0x0B;
+inline constexpr std::uint8_t kBr = 0x0C;
 inline constexpr std::uint8_t kReturn = 0x0F;
 inline constexpr std::uint8_t kCallIndirect = 0x11;
 inline constexpr std::uint8_t kSelect = 0x1B;
@@ -36,6 +38,7 @@ inline constexpr std::uint8_t kI32Eq = 0x46;
 inline constexpr std::uint8_t kI32Ne = 0x47;
 inline constexpr std::uint8_t kI32LtS = 0x48;
 inline constexpr std::uint8_t kI32LtU = 0x49;
+inline constexpr std::uint8_t kI32LeU = 0x4D;
 inline constexpr std::uint8_t kI32Popcnt = 0x69;
 inline constexpr std::uint8_t kI32Add = 0x6A;
 inline constexpr std::uint8_t kI32Sub = 0x6B;
@@ -74,7 +77,9 @@ public:
     // A load or store with alignment hint 0 (always valid) and a constant
     // offset.
     void Memory(std::uint8_t opcode, std::uint32_t offset);
-    void If();  // with an empty block type
+    void If();    // with an empty block type
+    void Loop();  // with an empty block type
+    void Br(std::uint32_t depth);
     void CallIndirect(std::uint32_t type_index);
 
     [[nodiscard]] const Bytes& bytes() const { return bytes_; }

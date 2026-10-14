@@ -64,7 +64,7 @@ CompileStatus WasmBackend::Compile(Translation* const* translations, const std::
     // The context's address is a wasm address in wasm32 alone; elsewhere
     // the modules are never run and check through the helper.
     const std::uint32_t context =
-        Runnable() ? static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&check_context_)) : 0u;
+        Runnable() ? static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&context_)) : 0u;
     Bytes bytes = CompileModule(blocks, count, CheckHelperIndex(), context);
     std::uint32_t indices[kMaxBatchBlocks];
     const WasmInstall answer = services_->Install(ticket, bytes.data(), bytes.size(), count, indices);
@@ -85,22 +85,29 @@ CompileStatus WasmBackend::Compile(Translation* const* translations, const std::
     }
 }
 
-ir::ExitResult WasmBackend::Run(const Translation& translation, CpuState& state, GuestMemory& memory)
+ir::ExitResult WasmBackend::Run(const Translation& translation, CpuState& state, GuestMemory& memory,
+                                const RunLimits& limits)
 {
 #if defined(__EMSCRIPTEN__)
-    check_context_.flags = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(memory.pages().data()));
-    check_context_.size = memory.size();
+    context_.flags = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(memory.pages().data()));
+    context_.size = memory.size();
+    context_.max_steps = limits.max_steps;
+    context_.attention = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(limits.attention));
+    context_.loops = 0;
     const auto function =
         reinterpret_cast<BlockFunction>(static_cast<std::uintptr_t>(translation.handle));
     const std::uint32_t code = function(&state, &memory,
                                         static_cast<std::uint32_t>(
                                             reinterpret_cast<std::uintptr_t>(memory.base())));
-    return DecodeExit(code, state.eip);
+    ir::ExitResult exit = DecodeExit(code, state.eip);
+    exit.loops = context_.loops;
+    return exit;
 #else
     // SetTranslation never turns kWasm on outside wasm32; should a host
     // installer answer anyway, the block is left to the interpreter.
     static_cast<void>(translation);
     static_cast<void>(memory);
+    static_cast<void>(limits);
     return ir::ExitResult{ir::ExitKind::kInterpret, state.eip, 0};
 #endif
 }
