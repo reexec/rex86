@@ -49,7 +49,7 @@
 
 ### 다음 / Next
 
-1. CI(Windows, Clang, 새니타이저, 번역 강제, 브라우저 셋)를 확인한다.
+1. (끝남) CI가 모두 녹색이다([실행 38506776008](https://github.com/reexec/rex86/actions/runs/38506776008)). Windows x86, Linux x64(GCC, Clang), 새니타이저, 번역 강제(평가기), libFuzzer, i386, AArch64, wasm32(번역 강제 `WASM` 포함), 브라우저 셋이다.
 2. 후속 후보: 블록 연결(남은 디스패치 약 30%), REP 문자열 번역, x87(도우미 호출), 인터프리터의 세밀한 무효화(#60).
 
-*1 Check CI (Windows, Clang, sanitizers, forced translation, three browsers). 2 Follow-up candidates: block linking (dispatch, still some 30%), translating REP strings, the x87 (helper calls), and finer invalidation in the interpreter (#60).*
+*1 (done) CI green (run 38506776008): Windows x86, Linux x64 (GCC, Clang), sanitizers, forced translation (evaluator), libFuzzer, i386, AArch64, wasm32 (forced `WASM` included) and the three browsers. 2 Follow-up candidates: block linking (dispatch, still some 30%), translating REP strings, the x87 (helper calls), and finer invalidation in the interpreter (#60).*
