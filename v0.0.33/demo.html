@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rex86 demo</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --panel: #f5f6f8;
+    --fg: #1d1f23;
+    --muted: #5d6470;
+    --line: #d9dde3;
+    --link: #0b5cad;
+    --accent: #0b5cad;
+    --ok: #1a7f37;
+    --fail: #c62828;
+    --running: #9a6700;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181c;
+      --panel: #1f2227;
+      --fg: #e6e8eb;
+      --muted: #9aa1ab;
+      --line: #33373e;
+      --link: #6cb0f5;
+      --accent: #6cb0f5;
+      --ok: #4ac26b;
+      --fail: #ff6b6b;
+      --running: #d4a72c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0 auto;
+    padding: 16px;
+    max-width: 880px;
+    background: var(--bg);
+    color: var(--fg);
+    font: 15px/1.5 system-ui, sans-serif;
+  }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 24px 0 8px; }
+  p { margin: 0 0 12px; }
+  a { color: var(--link); }
+  .muted { color: var(--muted); font-size: 13px; }
+  #agent { word-break: break-all; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: end; margin: 12px 0; }
+  .controls label { display: flex; flex-direction: column; gap: 2px; font-size: 13px; color: var(--muted); }
+  select, button { font: inherit; padding: 6px 10px; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+  button { cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; min-width: 96px; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  #status { font-weight: 600; min-height: 1.5em; }
+  .ok { color: var(--ok); }
+  .fail { color: var(--fail); }
+  .running { color: var(--running); }
+  .readouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+  .readout { background: var(--panel); border-radius: 8px; padding: 10px 12px; }
+  .readout .label { font-size: 12px; color: var(--muted); }
+  .readout .value { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .readout .value.small { font-size: 16px; }
+  canvas { width: 100%; height: 120px; display: block; background: var(--panel); border-radius: 8px; margin-top: 8px; }
+  .columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0 24px; }
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; font-size: 13px; }
+  .number { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  textarea {
+    width: 100%;
+    height: 150px;
+    background: var(--bg);
+    color: var(--fg);
+    border: 1px solid var(--line);
+    font: 12px/1.4 ui-monospace, monospace;
+  }
+</style>
+</head>
+<body>
+<p class="muted"><a href="../">← versions</a></p>
+<h1>rex86 demo</h1>
+<p class="muted">An IA-32 CPU core compiled to WebAssembly runs synthetic x86 guest code in this browser. Pick a workload and an engine: the interpreter, or translation of hot blocks into WebAssembly. Every lap is checked against a reference model, so a wrong result never counts as speed.</p>
+<p id="agent" class="muted"></p>
+
+<div class="controls">
+  <label>Workload <select id="workload"></select></label>
+  <label>Engine <select id="engine"></select></label>
+  <label>Steps per frame <select id="budget">
+    <option value="250000">250,000</option>
+    <option value="1000000" selected>1,000,000</option>
+    <option value="4000000">4,000,000</option>
+  </select></label>
+  <button id="run" class="primary" type="button" disabled>Start</button>
+</div>
+<p id="status" class="muted">loading the core</p>
+
+<div class="readouts">
+  <div class="readout"><div class="label">MIPS (last second)</div><div class="value" id="mips">—</div></div>
+  <div class="readout"><div class="label">MIPS (since start)</div><div class="value" id="mips-run">—</div></div>
+  <div class="readout"><div class="label">Frame time</div><div class="value" id="frame-ms">—</div></div>
+  <div class="readout"><div class="label">Steps retired</div><div class="value" id="retired">—</div></div>
+  <div class="readout"><div class="label">Laps verified</div><div class="value" id="laps">—</div></div>
+  <div class="readout"><div class="label">Run by translation</div><div class="value" id="translated-share">—</div></div>
+</div>
+<canvas id="chart" aria-label="MIPS per frame"></canvas>
+
+<div class="columns">
+  <div>
+    <h2>Against the target boards</h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th>board</th><th>CPU</th><th class="number">real time</th><th class="number">board frame</th></tr></thead>
+      <tbody id="boards"></tbody>
+    </table></div>
+    <p class="muted">Real time 1.0× means the guest would run as fast as on the board, assuming one instruction per clock. A board frame is 1/60 s of its instructions; under 16.7 ms keeps up.</p>
+  </div>
+  <div>
+    <h2>Translation and memory</h2>
+    <div class="table-wrap"><table><tbody id="details"></tbody></table></div>
+  </div>
+</div>
+
+<h2>Measure every workload</h2>
+<p class="muted">Runs each workload for the frames chosen with the engine above, as the <code>rex86_bench</code> tool does, and reports the median frame and MIPS.</p>
+<div class="controls">
+  <label>Frames <select id="measure-frames">
+    <option>5</option><option selected>20</option><option>60</option>
+  </select></label>
+  <button id="measure" type="button" disabled>Measure</button>
+</div>
+<div class="table-wrap"><table>
+  <thead><tr><th>workload</th><th class="number">MIPS</th><th class="number">frame p50</th><th class="number">p99</th><th class="number">first frame</th><th>result</th></tr></thead>
+  <tbody id="measured"></tbody>
+</table></div>
+
+<h2>Report</h2>
+<textarea id="report" readonly></textarea>
+<p><button id="copy" type="button">Copy report</button>
+  <span class="muted">Add it with the device, OS, browser and whether it was on power to
+  <a href="https://github.com/reexec/rex86/issues/62">issue #62</a>.</span></p>
+<script type="module" src="demo.js"></script>
+</body>
+</html>

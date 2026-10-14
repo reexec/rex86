@@ -1,0 +1,67 @@
+[
+  {
+    "version": "0.0.34",
+    "commit": "1694dc492c66a3d71ab184382ba2e0a568d56b01",
+    "date": "2026-10-15T00:07:07+09:00",
+    "demo": true
+  },
+  {
+    "version": "0.0.33",
+    "commit": "beb3de690503efccdf6ba6f51bba13e73de686c1",
+    "date": "2026-10-14T17:13:26+09:00",
+    "demo": true
+  },
+  {
+    "version": "0.0.32",
+    "commit": "b954127e3f28002278772e64212f502123a98dbb",
+    "date": "2026-10-14T16:05:11+09:00",
+    "demo": true
+  },
+  {
+    "version": "0.0.31",
+    "commit": "f12e13b3dfb443dfde0905675f82ec64dc63fb83",
+    "date": "2026-10-14T02:09:43+09:00",
+    "demo": true
+  },
+  {
+    "version": "0.0.30",
+    "commit": "6e915616060670eaeca89c5eef94901e4cc12a34",
+    "date": "2026-10-13T17:20:32+09:00",
+    "demo": true
+  },
+  {
+    "version": "0.0.29",
+    "commit": "0875a4b264417f088bed214da886b3e630721438",
+    "date": "2026-10-13T11:59:35+09:00"
+  },
+  {
+    "version": "0.0.28",
+    "commit": "90dc786ad0347cf25e847dcb3e3c071e0d098aa4",
+    "date": "2026-10-13T01:33:42+09:00"
+  },
+  {
+    "version": "0.0.27",
+    "commit": "f2e4759cf8a894b56dfe3d9dc3f4207cf43c75bb",
+    "date": "2026-10-12T19:24:51+09:00"
+  },
+  {
+    "version": "0.0.26",
+    "commit": "5dfe311dfbc990eebc3fb7bd803dc30cdf19b8cf",
+    "date": "2026-10-12T15:42:29+09:00"
+  },
+  {
+    "version": "0.0.25",
+    "commit": "1c8c8c04d15db47852a786fd06c8d402a1d721a0",
+    "date": "2026-10-12T00:27:02+09:00"
+  },
+  {
+    "version": "0.0.24",
+    "commit": "df152736aaced0cd8941da23098fde431840a19e",
+    "date": "2026-10-11T16:29:30+09:00"
+  },
+  {
+    "version": "0.0.23",
+    "commit": "8303ee4d2d86c2ca398e3b8ef50ee265057aacce",
+    "date": "2026-10-11T01:49:15+09:00"
+  }
+]

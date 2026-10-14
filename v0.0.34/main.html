@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>rex86 main-thread tool</title>
+</head>
+<body>
+<script>
+// Starts one Emscripten tool of a REX86_BROWSER build on the main thread
+// (design #48, decision 3), inside the runner's frame: the same messages as
+// worker.js, sent to the parent page.
+(() => {
+  const params = new URL(location.href).searchParams;
+  const tool = params.get('tool') ?? '';
+  const send = (message) => parent.postMessage({ rex86: true, ...message }, location.origin);
+  if (!/^rex86_[a-z0-9_]+$/.test(tool)) {
+    send({ kind: 'exit', code: 2, text: `not a rex86 tool: ${tool}` });
+    return;
+  }
+  window.Module = {
+    arguments: JSON.parse(params.get('args') ?? '[]'),
+    print: (text) => send({ kind: 'out', text }),
+    printErr: (text) => send({ kind: 'err', text }),
+    onExit: (code) => send({ kind: 'exit', code }),
+    onAbort: (what) => send({ kind: 'exit', code: 134, text: `abort: ${what}` }),
+    locateFile: (file) => `bin/${file}`,
+  };
+  window.addEventListener('error', (event) => send({ kind: 'exit', code: 134, text: `error: ${event.message}` }));
+  const script = document.createElement('script');
+  script.src = `bin/${tool}.js`;
+  script.onerror = () => send({ kind: 'exit', code: 127, text: `cannot load bin/${tool}.js` });
+  document.body.appendChild(script);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,39 @@
+<!doctype html>
+<!-- The module limit probe (design #49, decision 5): how many wasm modules
+     one process can hold. Open it in a fresh browser process, since modules
+     made before count too:  module_limit.html?funcs=1&cap=40000
+     drive.mjs --module-limit reads window.rex86ModuleLimit. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rex86 module limit</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; margin: 16px; }
+  pre { white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>wasm module limit</h1>
+<p>Creating modules until the browser refuses one or the cap is reached.</p>
+<pre id="result">running…</pre>
+<script>
+  const params = new URLSearchParams(location.search);
+  const funcs = Math.max(1, Number(params.get('funcs') ?? 1));
+  const cap = Math.max(1, Number(params.get('cap') ?? 40000));
+  const worker = new Worker('module_limit.js');
+  worker.onmessage = ({ data }) => {
+    window.rex86ModuleLimit = { funcs, cap, ...data };
+    document.getElementById('result').textContent =
+      `[rex86-module-limit] ua="${navigator.userAgent}" funcs=${funcs} cap=${cap} ` +
+      `modules=${data.modules} functions=${data.functions} module_bytes=${data.bytes} ` +
+      `ms=${data.ms} error="${data.error}"`;
+  };
+  worker.onerror = (event) => {
+    window.rex86ModuleLimit = { funcs, cap, modules: 0, functions: 0, bytes: 0, ms: 0, error: String(event.message) };
+    document.getElementById('result').textContent = `worker error: ${event.message}`;
+  };
+  worker.postMessage({ funcs, cap });
+</script>
+</body>
+</html>
